@@ -17,7 +17,7 @@ from src.utils_augmentation import CustomAugment
 # from sklearn.model_selection import train_test_split
 # from torch.utils.data import Subset
 
-data_dir = '/scratch/ssd001/home/ama/workspace/'
+data_dir = '/scratch/ssd001/home/ama/workspace/data/'
 
 def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_magnitude=9, workers=4, distributed=False):
     
