@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import grad
 from src.attacks import pgd, Linf_ball_projection
 from src.context import ctx_noparamgrad_and_eval
 import ipdb
@@ -72,8 +73,8 @@ def match_kl(loader, opt, args, source_model, list_witness_model, device):
                     else:
                         delta_w = delta_s
 
-                yp_w = F.log_softmax(witness_model(X+delta_w), dim=1)
-                loss += 1/args.num_witness * ((kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s)))
+                    yp_w = F.log_softmax(witness_model(X+delta_w), dim=1)
+                    loss += 1/args.num_witness * ((kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s)))
 
             opt.zero_grad()
             loss.backward()
@@ -87,32 +88,62 @@ def match_kl(loader, opt, args, source_model, list_witness_model, device):
     total_loss = total_loss / len(loader.dataset)
 
 def match_jacobian(loader, opt, args, source_model, list_witness_model, device):
-    
+
     total_loss = 0.
 
     source_model.train()
-    # kl_loss = nn.KLDivLoss(reduction="batchmean", log_target=True)
+    cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+    _dim = 3*32*32
+
+    if args.noise_type != 'none':
+        param = {'ord': np.inf,
+              'epsilon': 8./255.,
+              'alpha': 2./255.,
+              'num_iter': 20,
+              'restarts': 1,
+              'rand_init': True,
+              'clip': True,
+              'loss_fn': nn.CrossEntropyLoss(),
+              'dataset': args.dataset}
+        if args.noise_type == 'rand_init':
+            param['num_iter'] = 0
+        elif args.noise_type.startswith('pgd'):
+            _itr = args.noise_type[3:-6] if args.noise_type.endswith('indep') else args.noise_type[3::]
+            param['num_iter'] = int(_itr)
+        attacker = pgd(**param)
 
     with trange(len(loader)) as t:
         for X, y in loader:
+            loss = 0
             X, y = X.to(device), y.to(device)
 
-            if args.noise_type == 'rand_init':
-                delta = rand_init(args.dataset, X)
-                X = delta+X
-            X.requires_grad = True
-            loss_s = nn.CrossEntropyLoss()(source_model(X), y)
-            loss_s.backward()
+            if args.noise_type != 'none':
+                with ctx_noparamgrad_and_eval(source_model):
+                    delta_s = attacker.generate(source_model, X, y)
+            else:
+                delta_s = 0
 
-            grad_s = X.grad
+            X_s = (X+delta_s).clone().detach()
+            X_s.requires_grad = True
 
-            loss = 0
+            loss_s = nn.CrossEntropyLoss()(source_model(X_s), y)
+            dldx_s = len(X) * grad(loss_s, X_s, create_graph=True)[0].view(-1, _dim)
+
             for witness_model in list_witness_model:
                 witness_model.eval()
                 with ctx_noparamgrad_and_eval(witness_model):
-                    loss_w = nn.CrossEntropyLoss()(witness_model(X), y)
-                    yp_w = F.log_softmax(witness_model(X), dim=1)
-                    loss += 1/args.num_witness * ((kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s)))
+                    if args.noise_type.endswith('indep'):
+                        delta_w = attacker.generate(witness_model, X, y)
+                    else:
+                        delta_w = delta_s
+
+                    X_w = (X+delta_w).clone().detach()
+                    X_w.requires_grad = True
+
+                    loss_w = nn.CrossEntropyLoss()(witness_model(X_w), y)
+                    dldx_w = len(X) * grad(loss_w, X_w, create_graph=False)[0].view(-1, _dim)
+
+                    loss += 1/args.num_witness * -cos(dldx_s, dldx_w).mean()
 
             opt.zero_grad()
             loss.backward()
