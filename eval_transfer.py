@@ -14,7 +14,7 @@ from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, 
 from src.utils_general import seed_everything, get_model, get_optim
 import ipdb, pdb
 import copy
-from src.transfer import match_kl, match_jacobian
+from src.transfer import match_kl, match_jacobian, match_kl_jacobian
 
 best_acc1 = 0
 root_dir = '/scratch/hdd001/home/ama/improve-transferability/'
@@ -150,6 +150,10 @@ def main():
                 match_kl(train_loader, opt, args, source_model, list_witness_model, device)
             elif args.method == 'jacobian':
                 match_jacobian(train_loader, opt, args, source_model, list_witness_model, device)
+            elif args.method == 'kl-jacobian':
+                match_kl_jacobian(train_loader, opt, args, source_model, list_witness_model, device)
+            else:
+                raise ValueError('Unspecified method: {}'.format(args.method))
 
         # evaluation after modifying the source model
         post_test_log = test_clean(test_loader, source_model, device)
