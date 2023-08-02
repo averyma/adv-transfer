@@ -1,0 +1,40 @@
+# method / detaset / arch / pretrained
+method: "standard"
+dataset: "imagenet"
+arch: "resnet50"
+log_dir: "./exp/"
+pretrain: ""
+
+# optimization settings: https://github.com/pytorch/vision/tree/main/references/classification#resnet
+lr: 0.1
+lr_scheduler_type: "cosine"
+momentum: 0.9
+weight_decay: 0.0001
+nesterov: True
+batch_size: 128
+seed: 0
+epoch: 200 
+
+enable_batchnorm: 1
+input_normalization: 0
+
+warmup: True
+warmup_multiplier: 1
+warmup_epoch: 5
+
+# checkpoint
+ckpt_freq: 20
+
+# adversarial training
+pgd_steps: 10
+
+# wandb flag
+enable_wandb: false
+
+eval_AA: True
+eval_CC: True
+
+op_name: 'Identity'
+op_prob: 1.
+op_magnitude: 1
+print_freq: 100

@@ -1,0 +1,36 @@
+# method / detaset / arch / pretrained
+method: "standard"
+dataset: "cifar10"
+arch: "preactresnet18"
+log_dir: "./exp/"
+pretrain: ""
+
+# optimization settings
+lr: 0.1
+lr_scheduler_type: "cosine"
+momentum: 0.9
+weight_decay: 0.0002
+nesterov: False
+batch_size: 128
+seed: 0
+epoch: 200 
+
+warmup: True
+warmup_multiplier: 1
+warmup_epoch: 1
+
+# checkpoint
+ckpt_freq: 20
+
+# adversarial training
+pgd_steps: 10
+
+# wandb flag
+enable_wandb: false
+
+eval_AA: True
+eval_CC: True
+
+op_name: 'Identity'
+op_prob: 1.
+op_magnitude: 1
