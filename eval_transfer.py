@@ -130,19 +130,19 @@ def main():
         opt, _ = get_optim(source_model, args)
 
         # evaluation before modifying the source model
-        # pre_test_log = test_clean(test_loader, source_model, device)
-        # pre_transfer_log = test_transfer(test_loader, args, source_model, target_model, device)
-        # logger.add_scalar("pre/test_acc1({})".format(i), pre_test_log[0], epoch)
-        # logger.add_scalar("pre/transfer_acc1({})".format(i), pre_transfer_log[0], epoch)
-        # logging.info(
-            # "Source Model: [{0}]\t"
-            # "Test Acc before: {test_acc:.2f}\t"
-            # "Transfer Acc before: {transfer_acc:.2f}".format(
-                # i,
-                # test_acc=pre_test_log[0],
-                # transfer_acc=pre_transfer_log[0]))
-        # mean_pre_test_acc1 += pre_test_log[0]/3.
-        # mean_pre_transfer_acc1 += pre_transfer_log[0]/3.
+        pre_test_log = test_clean(test_loader, source_model, device)
+        pre_transfer_log = test_transfer(test_loader, args, source_model, target_model, device)
+        logger.add_scalar("pre/test_acc1({})".format(i), pre_test_log[0], epoch)
+        logger.add_scalar("pre/transfer_acc1({})".format(i), pre_transfer_log[0], epoch)
+        logging.info(
+            "Source Model: [{0}]\t"
+            "Test Acc before: {test_acc:.2f}\t"
+            "Transfer Acc before: {transfer_acc:.2f}".format(
+                i,
+                test_acc=pre_test_log[0],
+                transfer_acc=pre_transfer_log[0]))
+        mean_pre_test_acc1 += pre_test_log[0]/3.
+        mean_pre_transfer_acc1 += pre_transfer_log[0]/3.
 
         # modify source model
         for _epoch in range(args.epoch):
