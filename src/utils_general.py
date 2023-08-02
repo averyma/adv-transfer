@@ -1,3 +1,8 @@
+'''
+The configuration for vit on cifar10/100 follows:
+https://github.com/kentaroy47/vision-transformers-cifar10
+'''
+
 import random
 import os
 import operator as op
@@ -59,6 +64,56 @@ def get_model(argu, device=None):
         model = resnet50()
     elif argu.arch == 'vgg19':
         model = VGG('VGG19', argu.dataset, num_classes, argu.input_normalization, argu.enable_batchnorm)
+    elif argu.arch == 'simplevit':
+        from vit_pytorch import SimpleViT
+        model = SimpleViT(
+                image_size = 32,
+                patch_size = 4,
+                num_classes = num_classes,
+                dim = 512,
+                depth = 6,
+                heads = 8,
+                mlp_dim = 512
+                )
+    elif argu.arch == 'vit':
+        from vit_pytorch import ViT
+        model = ViT(
+                image_size = 32,
+                patch_size = 4,
+                num_classes = num_classes,
+                dim = 512,
+                depth = 6,
+                heads = 8,
+                mlp_dim = 512,
+                dropout = 0.1,
+                emb_dropout = 0.1
+                )
+    elif argu.arch == 'vit_small':
+        from vit_pytorch.vit_for_small_dataset import ViT
+        model = ViT(
+                image_size = 32,
+                patch_size = 4,
+                num_classes = num_classes,
+                dim = 512,
+                depth = 6,
+                heads = 8,
+                mlp_dim = 512,
+                dropout = 0.1,
+                emb_dropout = 0.1
+                )
+    elif argu.arch == 'vit_tiny':
+        from vit_pytorch.vit_for_small_dataset import ViT
+        model = ViT(
+                image_size = 32,
+                patch_size = 4,
+                num_classes = num_classes,
+                dim = 512,
+                depth = 4,
+                heads = 6,
+                mlp_dim = 256,
+                dropout = 0.1,
+                emb_dropout = 0.1
+                )
     else:
         raise NotImplementedError("model not included")
 
