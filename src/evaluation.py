@@ -133,52 +133,55 @@ def test_transfer(loader, args, source_model, target_model, device):
 
     # mean = [x / 255 for x in [125.3, 123.0, 113.9]]
     # std = [x / 255 for x in [63.0, 62.1, 66.7]]
+    with trange(len(loader)) as t:
+        for x,y in loader:
+            source_model.eval()
+            target_model.eval()
+            x, y = x.to(device), y.to(device)
 
-    for x,y in loader:
-        source_model.eval()
-        target_model.eval()
-        x, y = x.to(device), y.to(device)
+            with ctx_noparamgrad_and_eval(source_model):
+                delta = attacker.generate(source_model, x, y)
+            x_adv = x+delta
 
-        with ctx_noparamgrad_and_eval(source_model):
-            delta = attacker.generate(source_model, x, y)
-        x_adv = x+delta
+            # for i in range(3):
+                # print('channel: {}'.format(i))
+                # print('***********before unnormalization************')
+                # print('[x.min, x.max]: [{}, {}]'.format(
+                    # x[:,i,:,:].min().item(),
+                    # x[:,i,:,:].max().item()))
+                # print('[delta.min, delta.max]: [{}, {}]'.format(
+                    # delta[:,i,:,:].min().item(),
+                    # delta[:,i,:,:].max().item()))
+                # print('[x_adv.min, x_adv.max]: [{}, {}]'.format(
+                    # x_adv[:,i,:,:].min().item(),
+                    # x_adv[:,i,:,:].max().item()))
+                # print('***********after unnormalization************')
+                # print('[x.min, x.max]: [{}, {}]'.format(
+                    # (x[:,i,:,:]*std[i]+mean[i]).min().item(),
+                    # (x[:,i,:,:]*std[i]+mean[i]).max().item()))
+                # print('[delta.min, delta.max]: [{}, {}]'.format(
+                    # (delta[:,i,:,:]*std[i]).min().item(),
+                    # (delta[:,i,:,:]*std[i]).max().item()))
+                # print('[x_adv.min, x_adv.max]: [{}, {}]'.format(
+                    # (x_adv[:,i,:,:]*std[i]+mean[i]).min().item(),
+                    # (x_adv[:,i,:,:]*std[i]+mean[i]).max().item()))
 
-        # for i in range(3):
-            # print('channel: {}'.format(i))
-            # print('***********before unnormalization************')
-            # print('[x.min, x.max]: [{}, {}]'.format(
-                # x[:,i,:,:].min().item(),
-                # x[:,i,:,:].max().item()))
-            # print('[delta.min, delta.max]: [{}, {}]'.format(
-                # delta[:,i,:,:].min().item(),
-                # delta[:,i,:,:].max().item()))
-            # print('[x_adv.min, x_adv.max]: [{}, {}]'.format(
-                # x_adv[:,i,:,:].min().item(),
-                # x_adv[:,i,:,:].max().item()))
-            # print('***********after unnormalization************')
-            # print('[x.min, x.max]: [{}, {}]'.format(
-                # (x[:,i,:,:]*std[i]+mean[i]).min().item(),
-                # (x[:,i,:,:]*std[i]+mean[i]).max().item()))
-            # print('[delta.min, delta.max]: [{}, {}]'.format(
-                # (delta[:,i,:,:]*std[i]).min().item(),
-                # (delta[:,i,:,:]*std[i]).max().item()))
-            # print('[x_adv.min, x_adv.max]: [{}, {}]'.format(
-                # (x_adv[:,i,:,:]*std[i]+mean[i]).min().item(),
-                # (x_adv[:,i,:,:]*std[i]+mean[i]).max().item()))
+            with torch.no_grad():
+                y_hat = target_model(x_adv)
+                loss = torch.nn.CrossEntropyLoss()(y_hat, y)
+                batch_acc = accuracy(y_hat, y, topk=(1,5))
+                batch_correct = batch_acc[0].item()*x.shape[0]/100
+                batch_correct_5 = batch_acc[1].item()*x.shape[0]/100
 
-        with torch.no_grad():
-            y_hat = target_model(x_adv)
-            loss = torch.nn.CrossEntropyLoss()(y_hat, y)
-            batch_acc = accuracy(y_hat, y, topk=(1,5))
-            batch_correct = batch_acc[0].item()*x.shape[0]/100
-            batch_correct_5 = batch_acc[1].item()*x.shape[0]/100
+            total_correct += batch_correct
+            total_correct_5 += batch_correct_5
+            total_eval += len(x)
+            total_loss += loss.item() * x.shape[0]
 
-        total_correct += batch_correct
-        total_correct_5 += batch_correct_5
-        total_eval += len(x)
-        total_loss += loss.item() * x.shape[0]
-        # if total_eval > 1000:
-            # break
+            t.set_postfix(acc='{0:.2f}%'.format(batch_acc[0].item()))
+            t.update()
+            # if total_eval > 1000:
+                # break
 
     test_acc = total_correct / total_eval * 100
     test_acc_5 = total_correct_5 / total_eval * 100
