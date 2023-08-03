@@ -22,12 +22,14 @@ model_ckpt = {
         'cifar10': {
             'preactresnet18': '2023-07-19/cifar10/cosine/20230719-cifar10-preactresnet18-0.1-4',
             'preactresnet50': '2023-07-21/cifar10/cosine/20230721-cifar10-preactresnet50-0.1-4',
-            'vgg19': '2023-07-27/20230727-cifar10-vgg19-0.1-4'
+            'vgg19': '2023-07-27/20230727-cifar10-vgg19-0.1-4',
+            'vit_small': '2023-08-02/20230802-cifar10-vit_small-0.1-4'
             },
         'cifar100': {
             'preactresnet18': '2023-07-19/cifar100/cosine/20230719-cifar100-preactresnet18-0.1-4',
             'preactresnet50': '2023-07-21/cifar100/cosine/20230721-cifar100-preactresnet50-0.1-4',
-            'vgg19': '2023-07-27/20230727-cifar100-vgg19-0.1-4'
+            'vgg19': '2023-07-27/20230727-cifar100-vgg19-0.1-4',
+            'vit_small': '2023-08-02/20230802-cifar100-vit_small-0.1-4'
             }
         }
 
