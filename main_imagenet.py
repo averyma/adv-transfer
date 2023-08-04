@@ -229,6 +229,7 @@ def main_worker(gpu, ngpus_per_node, args):
             logger.add_scalar("lr", opt.param_groups[0]['lr'], _epoch)
             logger.add_scalar("test/top1_acc", test_acc1, _epoch)
             logger.add_scalar("test/top5_acc", test_acc5, _epoch)
+            logger.add_scalar("test/best_top1_acc", best_acc1, _epoch)
             logging.info(
                 "Epoch: [{0}]\t"
                 "Train Loss: {loss:.6f}\t"
