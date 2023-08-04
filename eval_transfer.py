@@ -198,7 +198,7 @@ def main():
             mean_test_acc1_diff=mean_test_acc1_diff,
             mean_transfer_acc1_diff=mean_transfer_acc1_diff))
 
-    if mean_transfer_acc1_diff > 0:
+    if mean_transfer_acc1_diff > 0 and args.save_modified_model:
         print('Saving the last source model to {}/model/'.format(args.j_dir))
         saveModel(args.j_dir+"/model/", "modified_source_model", source_model.state_dict())
 

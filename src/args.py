@@ -116,6 +116,8 @@ def parse_args():
                         default=1, type=int)
     parser.add_argument("--noise_type",
                         default='none', type=str)
+    parser.add_argument("--save_modified_model",
+                        default=False, type=distutils.util.strtobool)
 
 
     args = parser.parse_args()
