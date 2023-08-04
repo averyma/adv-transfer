@@ -198,6 +198,10 @@ def main():
             mean_test_acc1_diff=mean_test_acc1_diff,
             mean_transfer_acc1_diff=mean_transfer_acc1_diff))
 
+    if mean_transfer_acc1_diff > 0:
+        print('Saving the last source model to {}/model/'.format(args.j_dir))
+        saveModel(args.j_dir+"/model/", "modified_source_model", source_model.state_dict())
+
     # upload runs to wandb:
     if args.enable_wandb:
         save_wandb_retry = 0
