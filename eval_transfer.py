@@ -113,6 +113,7 @@ def main():
 
     # load source model, target model, do stuff to source models 
     print('Modifying {} using {}!'.format(args.source_arch, args.witness_arch))
+    print('Performing {}.'.format('misalignment' if args.misalign else 'alignment'))
     print('Transfering from {} to {}!'.format(args.source_arch, args.target_arch))
     for i, (source_model_ckpt, target_model_ckpt) in enumerate(zip(list_source_model_ckpt,
                                                                    list_target_model_ckpt)):

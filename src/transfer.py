@@ -74,7 +74,10 @@ def match_kl(loader, opt, args, source_model, list_witness_model, device):
                         delta_w = delta_s
 
                     yp_w = F.log_softmax(witness_model(X+delta_w), dim=1)
-                    loss += kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s)
+                    if args.misalign:
+                        loss -= (kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s))
+                    else:
+                        loss += (kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s))
 
             loss *= 1/args.num_witness
             opt.zero_grad()
@@ -143,7 +146,10 @@ def match_jacobian(loader, opt, args, source_model, list_witness_model, device):
 
                     loss_w = nn.CrossEntropyLoss()(witness_model(X_w), y)
                     dldx_w = len(X) * grad(loss_w, X_w, create_graph=False)[0].view(-1, _dim)
-                    loss += -cos(dldx_s, dldx_w).mean()
+                    if args.misalign:
+                        loss += cos(dldx_s, dldx_w).mean()
+                    else:
+                        loss -= cos(dldx_s, dldx_w).mean()
 
             loss *= 1/args.num_witness
             opt.zero_grad()
@@ -220,6 +226,12 @@ def match_kl_jacobian(loader, opt, args, source_model, list_witness_model, devic
 
                     loss += -cos(dldx_s, dldx_w).mean()
                     loss += kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s)
+                    if args.misalign:
+                        loss += cos(dldx_s, dldx_w).mean()
+                        loss -= (kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s))
+                    else:
+                        loss -= cos(dldx_s, dldx_w).mean()
+                        loss += (kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s))
 
             loss *= 1/args.num_witness
             opt.zero_grad()
