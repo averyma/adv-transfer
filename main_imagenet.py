@@ -248,7 +248,7 @@ def main_worker(gpu, ngpus_per_node, args):
             # checkpointing for preemption
             if _epoch % args.ckpt_freq == 0:
                 # since preemption would happen in the next epoch, so we want to start from {_epoch+1}
-                rotateCheckpoint(ckpt_dir, "custom_ckpt", model, opt, _epoch+1, best_acc1)
+                rotateCheckpoint(ckpt_dir, "ckpt", model, opt, _epoch+1, best_acc1)
                 logger.save_log()
 
             # save best model
