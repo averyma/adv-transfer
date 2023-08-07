@@ -21,11 +21,12 @@ echo "#!/bin/bash
 #SBATCH --output=${j_dir}/slurm_out/%j.out
 #SBATCH --error=${j_dir}/slurm_out/%j.err
 #SBATCH --partition=${partition}
-#SBATCH --cpus-per-gpu=8
+#SBATCH --cpus-per-gpu=4
 #SBATCH --mem=32gb
 #SBATCH --gres=gpu:${resource}
 #SBATCH --nodes=1
 #SBATCH --qos=normal
+#SBATCH --open-mode=append
 export MASTER_PORT=\"$(python -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1])')\"
 bash ${j_dir}/scripts/${j_name}.sh
 " > $j_dir/scripts/${j_name}.slrm
