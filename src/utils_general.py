@@ -64,6 +64,9 @@ def get_model(argu, device=None):
         model = resnet50()
     elif argu.arch == 'vgg19':
         model = VGG('VGG19', argu.dataset, num_classes, argu.input_normalization, argu.enable_batchnorm)
+    elif argu.arch == 'vgg19_bn':
+        from torchvision.models import vgg19_bn
+        model = vgg19_bn()
     elif argu.arch == 'simplevit':
         from vit_pytorch import SimpleViT
         model = SimpleViT(
@@ -75,6 +78,19 @@ def get_model(argu, device=None):
                 heads = 8,
                 mlp_dim = 512
                 )
+    elif argu.arch == 'vit-b-16':
+        from vit_pytorch import ViT
+        v = ViT(
+            image_size = 224,
+            patch_size = 16,
+            num_classes = 1000,
+            dim = 1024,
+            depth = 6,
+            heads = 16,
+            mlp_dim = 2048,
+            dropout = 0.1,
+            emb_dropout = 0.1
+        )
     elif argu.arch == 'vit':
         from vit_pytorch import ViT
         model = ViT(
