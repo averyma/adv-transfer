@@ -47,6 +47,8 @@ def parse_args():
     			default=argparse.SUPPRESS, type=int)
     parser.add_argument("--ckpt_freq",
     			default=argparse.SUPPRESS, type=int)
+    parser.add_argument("--resume_from_ckpt",
+    			default=None, type=str)
 
     # setup wandb logging
     parser.add_argument("--wandb_project",

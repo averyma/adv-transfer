@@ -133,6 +133,54 @@ def main_worker(gpu, ngpus_per_node, args):
 
     print('device: {}'.format(device))
 
+    is_main_task = not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)
+
+    if is_main_task and args.resume_from_ckpt is not None:
+        print('Resume from a prev ckpt at {}'.format(args.resume_from_ckpt))
+
+        log_dir = args.resume_from_ckpt[:-1] if args.resume_from_ckpt[-1] == '/' else args.resume_from_ckpt
+        while log_dir[-1] != '/':
+            log_dir = log_dir[:-1]
+        log_dir += 'log/'
+        print('Also copying log files in {}'.format(log_dir))
+
+        ckpt_prev_curr = os.path.join(args.resume_from_ckpt, "ckpt_curr.pth")
+        ckpt_prev_prev = os.path.join(args.resume_from_ckpt, "ckpt_prev.pth")
+
+        # only copying if there is still ckpt in the path spepcified by resume_from_ckpt
+        if os.path.isfile(ckpt_prev_curr) or os.path.isfile(ckpt_prev_prev):
+
+            log_prev_txt = os.path.join(log_dir, "log.txt")
+            log_prev_curr = os.path.join(log_dir, "log_curr.pth")
+            log_prev_prev = os.path.join(log_dir, "log_prev.pth")
+
+            ckpt_curr_curr = os.path.join(args.j_dir, str(args.j_id), "ckpt_curr.pth")
+            ckpt_curr_prev = os.path.join(args.j_dir, str(args.j_id), "ckpt_prev.pth")
+
+            log_curr_txt = os.path.join(args.j_dir, "log", "log.txt")
+            log_curr_curr = os.path.join(args.j_dir, "log", "log_curr.pth")
+            log_curr_prev = os.path.join(args.j_dir, "log", "log_prev.pth")
+
+            for from_path, to_path in zip(
+                    [ckpt_prev_curr, ckpt_prev_prev, log_prev_txt, log_prev_curr, log_prev_prev],
+                    [ckpt_curr_curr, ckpt_curr_prev, log_curr_txt, log_curr_curr, log_curr_prev]):
+                if os.path.isfile(from_path):
+                    print("copying {} to {}".format(from_path, to_path))
+                    cmd = "cp {} {}".format(from_path, to_path)
+                    os.system(cmd)
+                    if to_path.endswith('.pth'):
+                        try:
+                            torch.load(to_path)
+                        except:
+                            print("Corrupted file at {}".format(to_path))
+                        else:
+                            print("Copied file verified at {}!".format(to_path))
+                            print("Removing original file at {}!".format(from_path))
+                            cmd = 'rm {}'.format(from_path)
+                            os.system(cmd)
+        else:
+            print('No ckpt found at {}'.format(args.resume_from_ckpt))
+
     criterion = nn.CrossEntropyLoss().to(device)
 
     opt, lr_scheduler = get_optim(model, args)
@@ -172,8 +220,6 @@ def main_worker(gpu, ngpus_per_node, args):
         print('NO CHECKPOINT LOADED, FRESH START!')
 
     actual_trained_epoch = args.epoch
-
-    is_main_task = not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)
 
     if is_main_task:
         print('This is the device: {} for the main task!'.format(device))
