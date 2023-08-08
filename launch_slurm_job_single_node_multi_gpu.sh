@@ -21,7 +21,7 @@ echo "#!/bin/bash
 #SBATCH --output=${j_dir}/slurm_out/%j.out
 #SBATCH --error=${j_dir}/slurm_out/%j.err
 #SBATCH --partition=${partition}
-#SBATCH --cpus-per-gpu=4
+#SBATCH --cpus-per-gpu=8
 #SBATCH --mem=32gb
 #SBATCH --gres=gpu:${resource}
 #SBATCH --nodes=1
