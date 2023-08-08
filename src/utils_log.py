@@ -70,8 +70,8 @@ def saveCheckpoint(ckpt_dir, ckpt_name, model, opt, epoch, best_acc1):
         }, ckpt_dir, ckpt_name)
 
 def delCheckpoint(j_dir, j_id):
-    ckpt_curr = os.path.join(j_dir, str(j_id), "custom_ckpt_curr.pth")
-    ckpt_prev = os.path.join(j_dir, str(j_id), "custom_ckpt_prev.pth")
+    ckpt_curr = os.path.join(j_dir, str(j_id), "ckpt_curr.pth")
+    ckpt_prev = os.path.join(j_dir, str(j_id), "ckpt_prev.pth")
     for ckpt_path in [ckpt_curr, ckpt_prev]:
         if os.path.isfile(ckpt_path):
             print("ckpt {} is deleted".format(ckpt_path))
