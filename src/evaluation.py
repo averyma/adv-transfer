@@ -189,6 +189,55 @@ def test_transfer(loader, args, source_model, target_model, device):
 
     return test_acc, test_loss, test_acc_5
 
+def test_transfer_multiple_target(loader, args, source_model, list_target_model, device):
+    total_loss = np.zeros(len(list_target_model))
+    total_correct = np.zeros(len(list_target_model))
+    total_correct_5 = np.zeros(len(list_target_model))
+    total_eval = 0
+    param = {'ord': np.inf,
+          'epsilon': 8./255.,
+          'alpha': 2./255.,
+          'num_iter': 20,
+          'restarts': 1,
+          'rand_init': True,
+          'clip': True,
+          'loss_fn': nn.CrossEntropyLoss(),
+          'dataset': args.dataset}
+    attacker = pgd(**param)
+
+    with trange(len(loader)) as t:
+        for x,y in loader:
+            source_model.eval()
+            x, y = x.to(device), y.to(device)
+
+            with ctx_noparamgrad_and_eval(source_model):
+                delta = attacker.generate(source_model, x, y)
+                # delta = 0
+            x_adv = x+delta
+            for i, target_model in enumerate(list_target_model):
+                target_model.eval()
+                with torch.no_grad():
+                    y_hat = target_model(x_adv)
+                    loss = torch.nn.CrossEntropyLoss()(y_hat, y)
+                    batch_acc = accuracy(y_hat, y, topk=(1,5))
+                    batch_correct = batch_acc[0].item()*x.shape[0]/100
+                    batch_correct_5 = batch_acc[1].item()*x.shape[0]/100
+
+                total_correct[i] += batch_correct
+                total_correct_5[i] += batch_correct_5
+                total_loss[i] += loss.item() * x.shape[0]
+
+            total_eval += len(x)
+            t.update()
+            # if total_eval > 1000:
+                # break
+
+    test_acc = total_correct / total_eval * 100
+    test_acc_5 = total_correct_5 / total_eval * 100
+    test_loss = total_loss / total_eval
+
+    return test_acc, test_loss, test_acc_5
+
 def test_AA(loader, model, norm, eps, attacks_to_run=None, verbose=False):
 
     assert norm in ['L2', 'Linf']
