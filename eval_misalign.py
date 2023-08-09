@@ -78,7 +78,7 @@ def main():
     
     '''
     # make a list of model ckpts, using the following rule:
-    # source model:  seed 40 (only using 40 as the source model)
+    # source model:  seed 40,41,42 (randomly select one)
     # target model:  seed 43,44,45
     # witness model: seed 46,47,48
     # goal: improve target model using witness models
@@ -155,7 +155,7 @@ def main():
     for source_arch in ['preactresnet18', 'preactresnet50', 'vgg19', 'vit_small']:
         print('Evaluating original and misaligned models on {}'.format(source_arch))
         source_model_dir = root_dir + model_ckpt[args.dataset][source_arch]
-        source_model_ckpt = source_model_dir + str(random.randint(0,3))+'/model/best_model.pt'
+        source_model_ckpt = source_model_dir + str(random.randint(0, 2))+'/model/best_model.pt'
         print('source model ckpt: ', source_model_ckpt)
 
         # load source model
