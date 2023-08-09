@@ -180,6 +180,7 @@ def main_worker(gpu, ngpus_per_node, args):
                             os.system(cmd)
         else:
             print('No ckpt found at {}'.format(args.resume_from_ckpt))
+    dist.barrier()
 
     criterion = nn.CrossEntropyLoss().to(device)
 
