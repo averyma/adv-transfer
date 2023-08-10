@@ -101,9 +101,7 @@ def parse_args():
     parser.add_argument("--print_freq",
                         default=argparse.SUPPRESS, type=int)
 
-    # eval only:
-    # parser.add_argument("--eval_only",
-                        # default=False, type=distutils.util.strtobool)
+    # model alignment/misalignment
     parser.add_argument("--source_model",
                         default=argparse.SUPPRESS)
     parser.add_argument("--target_model",
@@ -121,6 +119,8 @@ def parse_args():
     parser.add_argument("--save_modified_model",
                         default=False, type=distutils.util.strtobool)
     parser.add_argument("--misalign",
+                        default=False, type=distutils.util.strtobool)
+    parser.add_argument("--ce_regularized",
                         default=False, type=distutils.util.strtobool)
 
 

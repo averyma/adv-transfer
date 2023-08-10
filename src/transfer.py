@@ -63,7 +63,8 @@ def match_kl(loader, opt, args, source_model, list_witness_model, device):
             else:
                 delta_s = 0
 
-            yp_s = F.log_softmax(source_model(X+delta_s), dim=1)
+            p_s = source_model(X+delta_s)
+            yp_s = F.log_softmax(p_s, dim=1)
 
             for witness_model in list_witness_model:
                 witness_model.eval()
@@ -80,6 +81,8 @@ def match_kl(loader, opt, args, source_model, list_witness_model, device):
                         loss += (kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s))
 
             loss *= 1/args.num_witness
+            if args.ce_regularized:
+                loss += nn.CrossEntropyLoss()(p_s, y)
             opt.zero_grad()
             loss.backward()
             opt.step()
