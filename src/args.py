@@ -21,6 +21,8 @@ def parse_args():
     			default=argparse.SUPPRESS, type=float)
     parser.add_argument("--lr_scheduler_type",
     			default=argparse.SUPPRESS)
+    parser.add_argument("--optim",
+    			default='sgd', type=str)
     parser.add_argument("--momentum",
     			default=argparse.SUPPRESS, type=float)
     parser.add_argument("--weight_decay",
@@ -100,6 +102,35 @@ def parse_args():
                         default=False, type=distutils.util.strtobool)
     parser.add_argument("--print_freq",
                         default=argparse.SUPPRESS, type=int)
+
+    # added for vit training on imagenet
+    parser.add_argument('--amp',
+                        default=None, action="store_true")
+    parser.add_argument("--label_smoothing",
+                        default=0., type=float)
+    parser.add_argument('--mixup_alpha',
+                        default=argparse.SUPPRESS, type=float)
+    parser.add_argument('--cutmix_alpha',
+                        default=argparse.SUPPRESS, type=float)
+    parser.add_argument('--clip_grad_norm',
+                        default=None, type=float)
+    parser.add_argument('--use-v2',
+                        action="store_true")
+    parser.add_argument('--ra_sampler',
+                        action="store_true")
+    parser.add_argument("--ra_reps",
+                        default=3, type=int,
+                        help="number of repetitions for Repeated Augmentation (default: 3)")
+    # parser.add_argument("--model_ema", action="store_true",
+                        # help="enable tracking Exponential Moving Average of model parameters")
+    # parser.add_argument("--model_ema_steps",
+                        # default=32, type=int,
+                        # help="the number of iterations that controls how often to update the EMA model (default: 32)")
+    # parser.add_argument("--model_ema_decay",
+                        # default=0.99998, type=float,
+                        # help="decay factor for Exponential Moving Average of model parameters (default: 0.99998)")
+
+
 
     # model alignment/misalignment
     parser.add_argument("--source_model",
