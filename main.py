@@ -156,7 +156,13 @@ def main():
         # checkpointing for preemption
         if _epoch % args.ckpt_freq == 0:
             # since preemption would happen in the next epoch, so we want to start from {_epoch+1}
-            rotateCheckpoint(ckpt_dir, "ckpt", model, opt, _epoch+1, best_acc1)
+            ckpt = {
+                    "state_dict": model.state_dict(),
+                    "optimizer": opt.state_dict(),
+                    "epoch": _epoch+1,
+                    "best_acc1":best_acc1
+                    }
+            rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
             logger.save_log()
 
         # save best model (after 75% way through the training)
