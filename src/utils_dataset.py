@@ -98,19 +98,13 @@ def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_mag
         valdir = os.path.join(dataroot, 'val')
         data_train = datasets.ImageFolder(traindir,transform_train)
         data_test = datasets.ImageFolder(valdir,transform_test)
-    elif dataset in ['imagenet-a', 'imagenet-o', 'imagenet-r']:
-        dataroot = '/scratch/ssd002/datasets/{}/'.format(dataset)
-        data_test = datasets.ImageFolder(dataroot,transform_test)
 
     if distributed:
-        if dataset not in ['imagenet-a', 'imagenet-o','imagenet-r']:
-            train_sampler = torch.utils.data.distributed.DistributedSampler(data_train)
-        else:
-            train_sampler = None
+        train_sampler = torch.utils.data.distributed.DistributedSampler(data_train)
         val_sampler = torch.utils.data.distributed.DistributedSampler(data_test, shuffle=False, drop_last=True)
     else:
-        train_sampler = None
-        val_sampler = None
+        train_sampler = torch.utils.data.RandomSampler(data_train)
+        val_sampler = torch.utils.data.SequentialSampler(data_test)
 
     if dataset not in ['imagenet-a', 'imagenet-o', 'imagenet-r']:
         train_loader = torch.utils.data.DataLoader(
