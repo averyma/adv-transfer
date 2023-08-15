@@ -22,6 +22,7 @@ from src.evaluation import test_clean, test_AA, eval_corrupt, eval_CE, test_gaus
 from src.utils_dataset import load_dataset, load_IMAGENET_C
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
 from src.utils_general import seed_everything, get_model, get_optim
+# import dill as pickle
 
 best_acc1 = 0
 
@@ -98,8 +99,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 # DistributedDataParallel, we need to divide the batch size
                 # ourselves based on the total number of GPUs of the current node.
                 args.batch_size = int(args.batch_size / ngpus_per_node)
-                # args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
-                args.workers = mp.cpu_count()//max(ngpus_per_node, 1)
+                # args.workers = mp.cpu_count()//max(ngpus_per_node, 1)
+                args.workers = 4
                 print("GPU: {}, batch_size: {}, workers: {}".format(args.gpu, args.batch_size, args.workers))
                 model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
             else:
@@ -135,10 +136,11 @@ def main_worker(gpu, ngpus_per_node, args):
 
     is_main_task = not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)
 
-    criterion = nn.CrossEntropyLoss().to(device)
+    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing).to(device)
 
     opt, lr_scheduler = get_optim(model, args)
-
+    scaler = torch.cuda.amp.GradScaler() if args.amp else None
+    print('agrs.amp: {}, scaler: {}'.format(args.amp, scaler))
     ckpt_epoch = 1
 
     ckpt_dir = args.j_dir+"/"+str(args.j_id)+"/"
@@ -227,7 +229,11 @@ def main_worker(gpu, ngpus_per_node, args):
         if lr_scheduler is not None:
             for _dummy in range(ckpt_epoch-1):
                 lr_scheduler.step()
+        if scaler is not None:
+            scaler.load_state_dict(ckpt["scaler"])
         print("CHECKPOINT LOADED to device: {}".format(device))
+        del ckpt
+        torch.cuda.empty_cache()
     else:
         print('NO CHECKPOINT LOADED, FRESH START!')
     dist.barrier()
@@ -237,7 +243,8 @@ def main_worker(gpu, ngpus_per_node, args):
     if is_main_task:
         print('This is the device: {} for the main task!'.format(device))
         # was hanging on wandb init on wandb 0.12.9, fixed after upgrading to 0.15.7
-        wandb_logger = wandbLogger(args)
+        if args.enable_wandb:
+            wandb_logger = wandbLogger(args)
         logger = metaLogger(args)
         logging.basicConfig(
             filename=args.j_dir+ "/log/log.txt",
@@ -251,9 +258,17 @@ def main_worker(gpu, ngpus_per_node, args):
                 args.op_prob,
                 args.op_magnitude,
                 args.workers,
-                args.distributed
+                args.distributed,
+                args.ra_sampler,
+                args.ra_reps
                 )
 
+    num_classes = 1000
+    from src.transforms import get_mixup_cutmix
+    mixup_cutmix = get_mixup_cutmix(
+        mixup_alpha=args.mixup_alpha, cutmix_alpha=args.cutmix_alpha, num_categories=num_classes, use_v2=args.use_v2
+    )
+    print('finished data loader')
 ##########################################################
 ###################### Training begins ###################
 ##########################################################
@@ -267,11 +282,12 @@ def main_worker(gpu, ngpus_per_node, args):
             test_acc1, test_acc5 = 99, 99
             # train_acc1, train_acc5, loss = 99, 99, 0
             dist.barrier()
-            train_acc1, train_acc5, loss = train(train_loader, model, criterion, opt, _epoch, device, args, is_main_task)
+            print('about to start training')
+            train_acc1, train_acc5, loss = train(train_loader, model, criterion, opt, _epoch, device, args, is_main_task, scaler, mixup_cutmix)
             dist.barrier()
         else:
             dist.barrier()
-            train_acc1, train_acc5, loss = train(train_loader, model, criterion, opt, _epoch, device, args, is_main_task)
+            train_acc1, train_acc5, loss = train(train_loader, model, criterion, opt, _epoch, device, args, is_main_task, scaler, mixup_cutmix)
             dist.barrier()
             test_acc1, test_acc5 = validate(test_loader, model, criterion, args, is_main_task)
             dist.barrier()
@@ -307,7 +323,16 @@ def main_worker(gpu, ngpus_per_node, args):
             # checkpointing for preemption
             if _epoch % args.ckpt_freq == 0:
                 # since preemption would happen in the next epoch, so we want to start from {_epoch+1}
-                rotateCheckpoint(ckpt_dir, "ckpt", model, opt, _epoch+1, best_acc1)
+                ckpt = {
+                        "state_dict": model.state_dict(),
+                        "optimizer": opt.state_dict(),
+                        "epoch": _epoch+1,
+                        "best_acc1":best_acc1
+                        }
+                if scaler is not None:
+                    ckpt["scaler"] = scaler.state_dict()
+
+                rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
             # save best model
@@ -412,7 +437,7 @@ def main_worker(gpu, ngpus_per_node, args):
     delCheckpoint(args.j_dir, args.j_id)
     ddp_cleanup()
 
-def train(train_loader, model, criterion, optimizer, epoch, device, args, is_main_task):
+def train(train_loader, model, criterion, optimizer, epoch, device, args, is_main_task, scaler, mixup_cutmix):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -435,20 +460,36 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args, is_mai
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
+        # mixup-cutmix
+        orig_target = target.clone().detach()
+        if args.mixup_alpha > 0 or args.cutmix_alpha > 0:
+            images, target = mixup_cutmix(images, target)
+
         # compute output
-        output = model(images)
-        loss = criterion(output, target)
+        with torch.cuda.amp.autocast(enabled=scaler is not None):
+            output = model(images)
+            loss = criterion(output, target)
 
         # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        acc1, acc5 = accuracy(output, orig_target, topk=(1, 5))
         losses.update(loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            if args.clip_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if args.clip_grad_norm is not None:
+                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            optimizer.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
