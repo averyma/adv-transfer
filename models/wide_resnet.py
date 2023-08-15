@@ -44,7 +44,7 @@ class wide_basic(nn.Module):
         return out
 
 class Wide_ResNet(nn.Module):
-    def __init__(self, depth, widen_factor, dropout_rate, num_classes, input_normalization=True):
+    def __init__(self, depth, widen_factor, dropout_rate, num_classes):
         super(Wide_ResNet, self).__init__()
         self.in_planes = 16
 
@@ -61,7 +61,6 @@ class Wide_ResNet(nn.Module):
         self.layer3 = self._wide_layer(wide_basic, nStages[3], n, dropout_rate, stride=2)
         self.bn1 = nn.BatchNorm2d(nStages[3], momentum=0.9)
         self.linear = nn.Linear(nStages[3], num_classes)
-        self.input_normalization = input_normalization
 
     def _wide_layer(self, block, planes, num_blocks, dropout_rate, stride):
         strides = [stride] + [1]*(int(num_blocks)-1)
@@ -73,19 +72,7 @@ class Wide_ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def per_image_standardization(self, x):
-        """
-        https://www.tensorflow.org/api_docs/python/tf/image/per_image_standardization
-        """
-        _dim = x.shape[1] * x.shape[2] * x.shape[3]
-        mean = torch.mean(x, dim=(1,2,3), keepdim = True)
-        stddev = torch.std(x, dim=(1,2,3), keepdim = True)
-        adjusted_stddev = torch.max(stddev, (1./np.sqrt(_dim)) * torch.ones_like(stddev))
-        return (x - mean) / adjusted_stddev
-
     def forward(self, x):
-        if self.input_normalization:
-            x = self.per_image_standardization(x)
         out = self.conv1(x)
         out = self.layer1(out)
         out = self.layer2(out)

@@ -1,4 +1,7 @@
 '''
+CIFAR10/100: model defintions are from https://github.com/kuangliu/pytorch-cifar/
+Imagenet: from torchvision 0.13.1
+
 The configuration for vit on cifar10/100 follows:
 https://github.com/kentaroy47/vision-transformers-cifar10
 '''
@@ -8,11 +11,11 @@ import os
 import operator as op
 import matplotlib.pyplot as plt
 import warnings
-import torch
+import torch, torchvision
 import torch.nn as nn
 import numpy as np
 import torch.optim as optim
-from models import PreActResNet18, PreActResNet50, Wide_ResNet, resnet50, resnet18, VGG
+from models import PreActResNet18, PreActResNet50, Wide_ResNet, VGG
 from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
 from torch.autograd import grad
@@ -31,148 +34,81 @@ def seed_everything(manual_seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
-def get_model(argu, device=None):
+def get_model(args, device=None):
 
-    if argu.dataset == 'cifar100':
-        num_classes=100
-    elif argu.dataset in ['cifar10', 'svhn', 'mnist', 'fashionmnist', 'imagenette','fmd']:
-        num_classes=10
-    elif argu.dataset == 'tiny':
-        num_classes=200
-    elif argu.dataset == 'dtd':
-        num_classes=47
-    elif argu.dataset in ['caltech', 'food']:
-        num_classes=101
-    elif argu.dataset == 'flowers':
-        num_classes=102
-    elif argu.dataset == 'cars':
-        num_classes=196
-    elif argu.dataset in ['imagenet','dummy']:
-        num_classes=1000
+    if args.dataset.startswith('cifar'):
+        if args.arch == 'preactresnet18':
+            model = PreActResNet18()
+        elif args.arch == 'preactresnet50':
+            model = PreActResNet50()
+        elif args.arch == 'wrn28':
+            model = Wide_ResNet(28, 10, 0.3)
+        elif args.arch == 'vgg19':
+            model = VGG('VGG19')
+        elif args.arch == 'vit_small':
+            from vit_pytorch.vit_for_small_dataset import ViT
+            num_classes = 10 if args.dataset == 'cifar10' else 100
+            model = ViT(
+                image_size=32,
+                patch_size=4,
+                num_classes=num_classes,
+                dim=512,
+                depth=6,
+                heads=8,
+                mlp_dim=512,
+                dropout=0.1,
+                emb_dropout=0.1
+                        )
+        else:
+            raise NotImplementedError("model not included")
     else:
-        raise ValueError('dataset unspecified!')
+        model = torchvision.models.get_model(args.arch)
 
-    if argu.arch == 'preactresnet18':
-        model = PreActResNet18(argu.dataset, num_classes, argu.input_normalization, argu.enable_batchnorm)
-    elif argu.arch == 'preactresnet50':
-        model = PreActResNet50(argu.dataset, num_classes, argu.input_normalization, argu.enable_batchnorm)
-    elif argu.arch == 'wrn28':
-        model = Wide_ResNet(28, 10, 0.3, num_classes, argu.input_normalization)
-    elif argu.arch == 'resnet18':
-        model = resnet18()
-    elif argu.arch == 'resnet50':
-        model = resnet50()
-    elif argu.arch == 'vgg19':
-        model = VGG('VGG19', argu.dataset, num_classes, argu.input_normalization, argu.enable_batchnorm)
-    elif argu.arch == 'vgg19_bn':
-        from torchvision.models import vgg19_bn
-        model = vgg19_bn()
-    elif argu.arch == 'simplevit':
-        from vit_pytorch import SimpleViT
-        model = SimpleViT(
-                image_size = 32,
-                patch_size = 4,
-                num_classes = num_classes,
-                dim = 512,
-                depth = 6,
-                heads = 8,
-                mlp_dim = 512
-                )
-    elif argu.arch == 'vit-b-16':
-        from vit_pytorch import ViT
-        v = ViT(
-            image_size = 224,
-            patch_size = 16,
-            num_classes = 1000,
-            dim = 1024,
-            depth = 6,
-            heads = 16,
-            mlp_dim = 2048,
-            dropout = 0.1,
-            emb_dropout = 0.1
-        )
-    elif argu.arch == 'vit':
-        from vit_pytorch import ViT
-        model = ViT(
-                image_size = 32,
-                patch_size = 4,
-                num_classes = num_classes,
-                dim = 512,
-                depth = 6,
-                heads = 8,
-                mlp_dim = 512,
-                dropout = 0.1,
-                emb_dropout = 0.1
-                )
-    elif argu.arch == 'vit_small':
-        from vit_pytorch.vit_for_small_dataset import ViT
-        model = ViT(
-                image_size = 32,
-                patch_size = 4,
-                num_classes = num_classes,
-                dim = 512,
-                depth = 6,
-                heads = 8,
-                mlp_dim = 512,
-                dropout = 0.1,
-                emb_dropout = 0.1
-                )
-    elif argu.arch == 'vit_tiny':
-        from vit_pytorch.vit_for_small_dataset import ViT
-        model = ViT(
-                image_size = 32,
-                patch_size = 4,
-                num_classes = num_classes,
-                dim = 512,
-                depth = 4,
-                heads = 6,
-                mlp_dim = 256,
-                dropout = 0.1,
-                emb_dropout = 0.1
-                )
-    else:
-        raise NotImplementedError("model not included")
-
-    # if argu.pretrain:
-        # model.load_state_dict(torch.load(argu.pretrain, map_location=device))
+    # if args.pretrain:
+        # model.load_state_dict(torch.load(args.pretrain, map_location=device))
         # model.to(device)
-        # print("\n ***  pretrain model loaded: "+ argu.pretrain + " *** \n")
+        # print("\n ***  pretrain model loaded: "+ args.pretrain + " *** \n")
 
     if device is not None:
         model.to(device)
 
     return model
 
-def get_optim(model, argu):
+def get_optim(model, args):
     """
     recommended setup:
     SGD_step: initial lr:0.1, momentum: 0.9, weight_decay: 0.0002, miliestones: [100, 150]
     Adam_step: initial lr:0.1, milestones: [80,120,160,180]
     others: constant lr at 0.001 should be sufficient
     """
-    opt = optim.SGD(
+    if args.optim.startswith("sgd"):
+        opt = optim.SGD(
             model.parameters(),
-            lr = argu.lr,
-            momentum = argu.momentum,
-            weight_decay = argu.weight_decay,
-            nesterov=argu.nesterov)
+            lr=args.lr,
+            momentum=args.momentum,
+            weight_decay=args.weight_decay,
+            nesterov=args.nesterov)
+    elif args.optim == "adamw":
+        opt = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        raise RuntimeError(f"Invalid optimizer {args.opt}. Only SGD, AdamW are supported.")
 
     # check if milestone is an empty array
-    if argu.lr_scheduler_type == "multistep":
-        _milestones = [argu.epoch/ 2, argu.epoch * 3 / 4]
+    if args.lr_scheduler_type == "multistep":
+        _milestones = [args.epoch/ 2, args.epoch * 3 / 4]
         lr_scheduler = optim.lr_scheduler.MultiStepLR(opt, milestones=_milestones, gamma=0.1)
-    elif argu.lr_scheduler_type == 'cosine':
-        lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=argu.epoch, eta_min=0.)
-    elif argu.lr_scheduler_type == "fixed":
+    elif args.lr_scheduler_type == 'cosine':
+        lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epoch, eta_min=0.)
+    elif args.lr_scheduler_type == "fixed":
         lr_scheduler = None
     else:
-        raise ValueError('invalid lr_schduler=%s' % argu.lr_scheduler_type)
+        raise ValueError('invalid lr_schduler=%s' % args.lr_scheduler_type)
 
-    if argu.warmup:
+    if args.warmup:
         lr_scheduler = GradualWarmupScheduler(
             opt,
-            multiplier=argu.warmup_multiplier,
-            total_epoch=argu.warmup_epoch,
+            multiplier=args.warmup_multiplier,
+            total_epoch=args.warmup_epoch,
             after_scheduler=lr_scheduler
         )
 
