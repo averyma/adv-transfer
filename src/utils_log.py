@@ -10,7 +10,8 @@ import wandb
 import ipdb
 import numpy as np
 
-def rotateCheckpoint(ckpt_dir, ckpt_name, model, opt, epoch, best_acc1):
+# def rotateCheckpoint(ckpt_dir, ckpt_name, model, opt, epoch, best_acc1):
+def rotateCheckpoint(ckpt_dir, ckpt_name, ckpt):
     ckpt_curr = os.path.join(ckpt_dir, ckpt_name+"_curr.pth")
     ckpt_prev = os.path.join(ckpt_dir, ckpt_name+"_prev.pth")
 
@@ -28,10 +29,11 @@ def rotateCheckpoint(ckpt_dir, ckpt_name, model, opt, epoch, best_acc1):
     while not load_successfully and save_counter < 10:
         saveCheckpoint(ckpt_dir,
                        ckpt_name+"_curr.pth",
-                       model,
-                       opt,
-                       epoch,
-                       best_acc1)
+                       ckpt)
+                       # model,
+                       # opt,
+                       # epoch,
+                       # best_acc1)
         try:
             torch.load(ckpt_curr)
         except:
@@ -61,13 +63,15 @@ def saveModel(save_path, model_name, model_state_dict):
                 print('Model saved and verified!')
                 load_successfully = True
 
-def saveCheckpoint(ckpt_dir, ckpt_name, model, opt, epoch, best_acc1):
-    checkpoint_save({
-        "state_dict": model.state_dict(),
-        "optimizer": opt.state_dict(),
-        "epoch": epoch,
-        "best_acc1":best_acc1
-        }, ckpt_dir, ckpt_name)
+# def saveCheckpoint(ckpt_dir, ckpt_name, model, opt, epoch, best_acc1):
+def saveCheckpoint(ckpt_dir, ckpt_name, ckpt):
+    # checkpoint_save({
+        # "state_dict": model.state_dict(),
+        # "optimizer": opt.state_dict(),
+        # "epoch": epoch,
+        # "best_acc1":best_acc1
+        # }, ckpt_dir, ckpt_name)
+    checkpoint_save(ckpt, ckpt_dir, ckpt_name)
 
 def delCheckpoint(j_dir, j_id):
     ckpt_curr = os.path.join(j_dir, str(j_id), "ckpt_curr.pth")
