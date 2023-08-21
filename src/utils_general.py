@@ -16,6 +16,7 @@ import torch.nn as nn
 import numpy as np
 import torch.optim as optim
 from models import PreActResNet18, PreActResNet50, Wide_ResNet, VGG
+from vit_pytorch.vit_for_small_dataset import ViT
 from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
 from torch.autograd import grad
@@ -37,17 +38,16 @@ def seed_everything(manual_seed):
 def get_model(args, device=None):
 
     if args.dataset.startswith('cifar'):
+        num_classes = 10 if args.dataset == 'cifar10' else 100
         if args.arch == 'preactresnet18':
-            model = PreActResNet18()
+            model = PreActResNet18(num_classes)
         elif args.arch == 'preactresnet50':
-            model = PreActResNet50()
+            model = PreActResNet50(num_classes)
         elif args.arch == 'wrn28':
-            model = Wide_ResNet(28, 10, 0.3)
+            model = Wide_ResNet(28, 10, 0.3, num_classes)
         elif args.arch == 'vgg19':
-            model = VGG('VGG19')
+            model = VGG('VGG19', num_classes)
         elif args.arch == 'vit_small':
-            from vit_pytorch.vit_for_small_dataset import ViT
-            num_classes = 10 if args.dataset == 'cifar10' else 100
             model = ViT(
                 image_size=32,
                 patch_size=4,
