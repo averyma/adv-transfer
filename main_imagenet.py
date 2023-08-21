@@ -22,6 +22,7 @@ from src.evaluation import test_clean, test_AA, eval_corrupt, eval_CE, test_gaus
 from src.utils_dataset import load_dataset, load_IMAGENET_C
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
 from src.utils_general import seed_everything, get_model, get_optim
+from src.transforms import get_mixup_cutmix
 # import dill as pickle
 
 best_acc1 = 0
@@ -258,16 +259,16 @@ def main_worker(gpu, ngpus_per_node, args):
                 args.op_prob,
                 args.op_magnitude,
                 args.workers,
-                args.distributed,
-                args.ra_sampler,
-                args.ra_reps
+                args.distributed
                 )
 
     num_classes = 1000
-    from src.transforms import get_mixup_cutmix
     mixup_cutmix = get_mixup_cutmix(
-        mixup_alpha=args.mixup_alpha, cutmix_alpha=args.cutmix_alpha, num_categories=num_classes, use_v2=args.use_v2
-    )
+            mixup_alpha=args.mixup_alpha,
+            cutmix_alpha=args.cutmix_alpha,
+            num_categories=num_classes,
+            use_v2=args.use_v2
+            )
     print('finished data loader')
 ##########################################################
 ###################### Training begins ###################
