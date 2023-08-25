@@ -49,6 +49,9 @@ class pgd(object):
         elif dataset == 'svhn':
             mean = torch.tensor([0.4376821, 0.4437697, 0.47280442], device=x.device)
             std = torch.tensor([0.19803012, 0.20101562, 0.19703614], device=x.device)
+        elif dataset == 'imagenet':
+            mean = torch.tensor([0.485, 0.456, 0.406], device=x.device)
+            std = torch.tensor([0.229, 0.224, 0.225], device=x.device)
 
         '''
         before normalization:
