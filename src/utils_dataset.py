@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from torch.utils.data import Dataset, DataLoader, TensorDataset
+from torch.utils.data import Dataset, DataLoader, TensorDataset, Subset
 import torch.utils.data.distributed
 from torchvision import datasets, transforms
 from torchvision.datasets.vision import VisionDataset
@@ -20,7 +20,7 @@ from src.utils_augmentation import CustomAugment
 data_dir = '/scratch/ssd001/home/ama/workspace/data/'
 
 def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_magnitude=9, workers=4, distributed=False):
-    
+
     # default augmentation
     if dataset.startswith('cifar') or dataset == 'svhn':
         if dataset == 'cifar10':
@@ -118,6 +118,69 @@ def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_mag
         num_workers=workers, pin_memory=True, sampler=val_sampler)
 
     return train_loader, test_loader, train_sampler, val_sampler
+
+def load_imagenet_test_shuffle(batch_size=128, workers=4, distributed=False):
+
+    # default augmentation
+    # mean/std obtained from: https://github.com/pytorch/examples/blob/97304e232807082c2e7b54c597615dc0ad8f6173/imagenet/main.py#L197-L198
+    # detail: https://discuss.pytorch.org/t/normalization-in-the-mnist-example/457/7
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+
+    transform_test = transforms.Compose([
+        transforms.Resize(256, interpolation=Image.BICUBIC),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std)
+    ])
+    
+    # load dataset
+    dataroot = '/scratch/ssd002/datasets/imagenet'
+    valdir = os.path.join(dataroot, 'val')
+    data_test = datasets.ImageFolder(valdir,transform_test)
+
+    if distributed:
+        val_sampler = torch.utils.data.distributed.DistributedSampler(data_test)
+    else:
+        val_sampler = torch.utils.data.RandomSampler(data_test)
+
+    test_loader = torch.utils.data.DataLoader(
+        data_test, batch_size=batch_size, shuffle=(val_sampler is None),
+        num_workers=workers, pin_memory=True, sampler=val_sampler)
+
+    return test_loader, val_sampler
+
+def load_imagenet_test_1k(batch_size=128, workers=4, distributed=False):
+
+    # default augmentation
+    # mean/std obtained from: https://github.com/pytorch/examples/blob/97304e232807082c2e7b54c597615dc0ad8f6173/imagenet/main.py#L197-L198
+    # detail: https://discuss.pytorch.org/t/normalization-in-the-mnist-example/457/7
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+
+    transform_test = transforms.Compose([
+        transforms.Resize(256, interpolation=Image.BICUBIC),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std)
+    ])
+    
+    # load dataset
+    dataroot = '/scratch/ssd002/datasets/imagenet'
+    valdir = os.path.join(dataroot, 'val')
+    data_test = datasets.ImageFolder(valdir, transform_test)
+    data_test_1k = Subset(data_test, range(0, len(data_test), 50))
+
+    if distributed:
+        val_sampler = torch.utils.data.distributed.DistributedSampler(data_test_1k, shuffle=False, drop_last=True)
+    else:
+        val_sampler = torch.utils.data.SequentialSampler(data_test_1k)
+
+    test_loader = torch.utils.data.DataLoader(
+        data_test_1k, batch_size=batch_size, shuffle=False,
+        num_workers=workers, pin_memory=True, sampler=val_sampler)
+
+    return test_loader
 
 def load_IMAGENET_C(batch_size=32, distortion_name='brightness', severity=1, workers=4, distributed=False):
     
