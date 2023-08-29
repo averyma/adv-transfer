@@ -356,8 +356,9 @@ def main_worker(gpu, ngpus_per_node, args):
                 dist.barrier()
                 if args.distributed:
                     val_sampler.set_epoch(27)
+                test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, target_model, source_model, args, is_main_task)
+                dist.barrier()
                 if is_main_task:
-                    test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, target_model, source_model, args, is_main_task)
                     result[prefix + '-rob-' + target_arch] = test_acc1
                     print('{}: {:.2f}'.format(prefix + '-rob-' + target_arch, test_acc1))
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result}
@@ -377,8 +378,9 @@ def main_worker(gpu, ngpus_per_node, args):
                 dist.barrier()
                 if args.distributed:
                     val_sampler.set_epoch(27)
+                test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, source_model, target_model, args, is_main_task)
+                dist.barrier()
                 if is_main_task:
-                    test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, source_model, target_model, args, is_main_task)
                     result[prefix + '-tnsf-' + target_arch] = test_acc1
                     print('{}: {:.2f}'.format(prefix + '-tnsf-' + target_arch, test_acc1))
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result}
@@ -607,78 +609,82 @@ def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
           'loss_fn': nn.CrossEntropyLoss(),
           'dataset': args.dataset}
     attacker = pgd(**param)
-    num_eval = 500
+    num_eval = 1000
 
-    def run_validate(loader, base_progress=0):
-        total_qualified = 0
+    def run_validate_one_epoch(images, target, base_progress=0):
         end = time.time()
-        for i, (images, target) in enumerate(loader):
-            i = base_progress + i
-            if args.gpu is not None and torch.cuda.is_available():
-                images = images.cuda(args.gpu, non_blocking=True)
-            if torch.backends.mps.is_available():
-                images = images.to('mps')
-                target = target.to('mps')
-            if torch.cuda.is_available():
-                target = target.cuda(args.gpu, non_blocking=True)
+        if args.gpu is not None and torch.cuda.is_available():
+            images = images.cuda(args.gpu, non_blocking=True)
+        if torch.backends.mps.is_available():
+            images = images.to('mps')
+            target = target.to('mps')
+        if torch.cuda.is_available():
+            target = target.cuda(args.gpu, non_blocking=True)
 
-            with ctx_noparamgrad_and_eval(source_model):
-                delta_s = attacker.generate(source_model, images, target)
+        with ctx_noparamgrad_and_eval(source_model):
+            delta_s = attacker.generate(source_model, images, target)
 
-            with ctx_noparamgrad_and_eval(target_model):
-                delta_t = attacker.generate(target_model, images, target)
+        with ctx_noparamgrad_and_eval(target_model):
+            delta_t = attacker.generate(target_model, images, target)
 
-            # compute output
-            with torch.no_grad():
-                p_s = source_model(images)
-                p_t = target_model(images)
-                p_adv_s = source_model(images+delta_s)
-                p_adv_t = target_model(images+delta_t)
-                transfer_qualified = return_qualified(p_s, p_t, p_adv_s, p_adv_t, target)
+        # compute output
+        with torch.no_grad():
+            p_s = source_model(images)
+            p_t = target_model(images)
+            p_adv_s = source_model(images+delta_s)
+            p_adv_t = target_model(images+delta_t)
+            qualified = return_qualified(p_s, p_t, p_adv_s, p_adv_t, target)
 
-                p_transfer = target_model((images+delta_s)[transfer_qualified, ::])
+            p_transfer = target_model((images+delta_s)[qualified, ::])
 
-            # measure accuracy and record loss
-            num_qualified = transfer_qualified.sum().item()
-            acc1, acc5 = accuracy(p_transfer, target[transfer_qualified], topk=(1, 5))
-            top1.update(acc1[0], num_qualified)
-            top5.update(acc5[0], num_qualified)
+        # measure accuracy and record loss
+        num_qualified = qualified.sum().item()
+        acc1, acc5 = accuracy(p_transfer, target[qualified], topk=(1, 5))
+        top1.update(acc1[0], num_qualified)
+        top5.update(acc5[0], num_qualified)
+        total_qualified.update(num_qualified)
 
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
 
-            if i % args.print_freq == 0 and is_main_task:
-                progress.display(i + 1)
-
-            total_qualified += num_qualified
-            if total_qualified > num_eval:
-                break
 
     batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
     top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
     top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    total_qualified = AverageMeter('Total Qualified', ':6.2f', Summary.SUM)
     progress = ProgressMeter(
         len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
-        [batch_time, top1, top5],
-        prefix='Test: ')
+        [batch_time, top1, top5, total_qualified],
+        prefix='Transfer: ')
 
     # switch to evaluate mode
     source_model.eval()
     target_model.eval()
 
-    run_validate(val_loader)
+    for i, (images, target) in enumerate(val_loader):
+        run_validate_one_epoch(images, target)
+
+        if is_main_task:
+            progress.display(i + 1)
+
+        if args.distributed:
+            total_qualified.all_reduce()
+
+        if total_qualified.sum > (num_eval/args.ngpus_per_node):
+            break
+
     if args.distributed:
         top1.all_reduce()
         top5.all_reduce()
 
-    if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
-        aux_val_dataset = Subset(val_loader.dataset,
-                                 range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
-        aux_val_loader = torch.utils.data.DataLoader(
-            aux_val_dataset, batch_size=args.batch_size, shuffle=False,
-            num_workers=args.workers, pin_memory=True)
-        run_validate(aux_val_loader, len(val_loader))
+    # if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
+        # aux_val_dataset = Subset(val_loader.dataset,
+                                 # range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
+        # aux_val_loader = torch.utils.data.DataLoader(
+            # aux_val_dataset, batch_size=args.batch_size, shuffle=False,
+            # num_workers=args.workers, pin_memory=True)
+        # run_validate(aux_val_loader, len(val_loader))
 
     if is_main_task:
         progress.display_summary()
