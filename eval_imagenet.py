@@ -18,7 +18,7 @@ import numpy as np
 from src.args import get_args, print_args
 from src.evaluation import test_clean, test_AA, eval_corrupt, eval_CE, test_gaussian, CORRUPTIONS_IMAGENET_C
 
-from src.utils_dataset import load_dataset, load_IMAGENET_C
+from src.utils_dataset import load_dataset, load_imagenet_test_shuffle, load_imagenet_test_1k
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
 from src.utils_general import seed_everything, get_model, get_optim
 from src.transforms import get_mixup_cutmix
@@ -257,8 +257,11 @@ def main_worker(gpu, ngpus_per_node, args):
             filename=args.j_dir+ "/log/log.txt",
             format='%(asctime)s %(message)s', level=logging.INFO)
         logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-
-    train_loader, test_loader, train_sampler, val_sampler = load_dataset(
+ 
+    # train_loader and test_loader are the original loader for imagenet
+    # train_sampler is necessary for alignment
+    # val_sampler is removed so we can use the one from test_loader_shuffle
+    train_loader, test_loader, train_sampler, _ = load_dataset(
                 args.dataset,
                 args.batch_size,
                 args.op_name,
@@ -266,6 +269,21 @@ def main_worker(gpu, ngpus_per_node, args):
                 args.op_magnitude,
                 args.workers,
                 args.distributed
+                )
+
+    # test_loader_1k contains exactly 1 sample from each of the 1000 class
+    test_loader_1k = load_imagenet_test_1k(
+                batch_size=32,
+                workers=0,
+                distributed=args.distributed
+                )
+
+    # test_loader_shuffle is contains the same number of data as the original
+    # but data is randomly shuffled, this is for evaluating transfer attack
+    test_loader_shuffle, val_sampler = load_imagenet_test_shuffle(
+                batch_size=32,
+                workers=0,
+                distributed=args.distributed
                 )
 
     num_classes = 1000
@@ -288,6 +306,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                                 device,
                                                 args,
                                                 is_main_task)
+        del train_loader
     dist.barrier()
 ##########################################################
 ###################### Training ends #####################
@@ -300,17 +319,6 @@ def main_worker(gpu, ngpus_per_node, args):
         logger.save_log()
     dist.barrier()
     
-    # test_loader_1k contains exactly 1 sample from each of the 1000 class
-    test_dataset_1k = Subset(test_loader.dataset, range(0, len(test_loader.dataset), 50))
-    test_loader_1k = torch.utils.data.DataLoader(
-        test_dataset_1k, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
-
-    # test_loader_shuffle is a shuffled version of the original test_loader
-    test_loader_shuffle = torch.utils.data.DataLoader(
-        test_loader.dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=True)
-
     for (prefix, model) in zip(['pre', 'post'], [orig_source_model, source_model]):
 
         if result[prefix + '-test'] is None:
@@ -346,10 +354,11 @@ def main_worker(gpu, ngpus_per_node, args):
                 target_model = torch.nn.parallel.DistributedDataParallel(target_model, device_ids=[args.gpu])
 
                 dist.barrier()
-                test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, target_model, source_model, args, is_main_task)
-                dist.barrier()
-                result[prefix + '-rob-' + target_arch] = test_acc1
+                if args.distributed:
+                    val_sampler.set_epoch(27)
                 if is_main_task:
+                    test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, target_model, source_model, args, is_main_task)
+                    result[prefix + '-rob-' + target_arch] = test_acc1
                     print('{}: {:.2f}'.format(prefix + '-rob-' + target_arch, test_acc1))
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result}
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
@@ -366,15 +375,15 @@ def main_worker(gpu, ngpus_per_node, args):
                 target_model = torch.nn.parallel.DistributedDataParallel(target_model, device_ids=[args.gpu])
 
                 dist.barrier()
-                test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, source_model, target_model, args, is_main_task)
-                dist.barrier()
-                result[prefix + '-tnsf-' + target_arch] = test_acc1
+                if args.distributed:
+                    val_sampler.set_epoch(27)
                 if is_main_task:
+                    test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, source_model, target_model, args, is_main_task)
+                    result[prefix + '-tnsf-' + target_arch] = test_acc1
                     print('{}: {:.2f}'.format(prefix + '-tnsf-' + target_arch, test_acc1))
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result}
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
-
 
     dist.barrier()
 
@@ -598,7 +607,7 @@ def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
           'loss_fn': nn.CrossEntropyLoss(),
           'dataset': args.dataset}
     attacker = pgd(**param)
-    num_eval = 1000
+    num_eval = 500
 
     def run_validate(loader, base_progress=0):
         total_qualified = 0
@@ -643,7 +652,7 @@ def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
                 progress.display(i + 1)
 
             total_qualified += num_qualified
-            if total_qualified > num_eval/args.ngpus_per_node:
+            if total_qualified > num_eval:
                 break
 
     batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
