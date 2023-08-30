@@ -46,51 +46,59 @@ def main():
     args = get_args()
     print_args(args)
 
+    ckpt_dir = args.j_dir+"/"+str(args.j_id)+"/"
+    ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
+    ckpt_location_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
+
+    '''
+    when no ckpt saved at the curr dir and resume_from_ckpt is enabled,
+    we copy the ckpt and log files from path specified by resume_from_ckpt to the curr dir
+    '''
     if args.resume_from_ckpt is not None:
-        print('Resume from a prev ckpt at {}'.format(args.resume_from_ckpt))
+        if not (os.path.exists(ckpt_location_prev) or os.path.exists(ckpt_location_curr)):
+            print('Resume from a prev ckpt at {}'.format(args.resume_from_ckpt))
 
-        log_dir = args.resume_from_ckpt[:-1] if args.resume_from_ckpt[-1] == '/' else args.resume_from_ckpt
-        while log_dir[-1] != '/':
-            log_dir = log_dir[:-1]
-        log_dir += 'log/'
-        print('Also copying log files in {}'.format(log_dir))
+            log_dir = args.resume_from_ckpt[:-1] if args.resume_from_ckpt[-1] == '/' else args.resume_from_ckpt
+            while log_dir[-1] != '/':
+                log_dir = log_dir[:-1]
+            log_dir += 'log/'
+            print('Also copying log files in {}'.format(log_dir))
 
-        ckpt_prev_curr = os.path.join(args.resume_from_ckpt, "ckpt_curr.pth")
-        ckpt_prev_prev = os.path.join(args.resume_from_ckpt, "ckpt_prev.pth")
+            ckpt_prev_curr = os.path.join(args.resume_from_ckpt, "ckpt_curr.pth")
+            ckpt_prev_prev = os.path.join(args.resume_from_ckpt, "ckpt_prev.pth")
 
-        # only copying if there is still ckpt in the path spepcified by resume_from_ckpt
-        if os.path.isfile(ckpt_prev_curr) or os.path.isfile(ckpt_prev_prev):
+            # only copying if there is still ckpt in the path spepcified by resume_from_ckpt
+            if os.path.isfile(ckpt_prev_curr) or os.path.isfile(ckpt_prev_prev):
 
-            log_prev_txt = os.path.join(log_dir, "log.txt")
-            log_prev_curr = os.path.join(log_dir, "log_curr.pth")
-            log_prev_prev = os.path.join(log_dir, "log_prev.pth")
+                log_prev_txt = os.path.join(log_dir, "log.txt")
+                log_prev_curr = os.path.join(log_dir, "log_curr.pth")
+                log_prev_prev = os.path.join(log_dir, "log_prev.pth")
 
-            ckpt_curr_curr = os.path.join(args.j_dir, str(args.j_id), "ckpt_curr.pth")
-            ckpt_curr_prev = os.path.join(args.j_dir, str(args.j_id), "ckpt_prev.pth")
+                ckpt_curr_curr = os.path.join(args.j_dir, str(args.j_id), "ckpt_curr.pth")
+                ckpt_curr_prev = os.path.join(args.j_dir, str(args.j_id), "ckpt_prev.pth")
 
-            log_curr_txt = os.path.join(args.j_dir, "log", "log.txt")
-            log_curr_curr = os.path.join(args.j_dir, "log", "log_curr.pth")
-            log_curr_prev = os.path.join(args.j_dir, "log", "log_prev.pth")
+                log_curr_txt = os.path.join(args.j_dir, "log", "log.txt")
+                log_curr_curr = os.path.join(args.j_dir, "log", "log_curr.pth")
+                log_curr_prev = os.path.join(args.j_dir, "log", "log_prev.pth")
 
-            for from_path, to_path in zip(
-                    [ckpt_prev_curr, ckpt_prev_prev, log_prev_txt, log_prev_curr, log_prev_prev],
-                    [ckpt_curr_curr, ckpt_curr_prev, log_curr_txt, log_curr_curr, log_curr_prev]):
-                if os.path.isfile(from_path):
-                    print("copying {} to {}".format(from_path, to_path))
-                    cmd = "cp {} {}".format(from_path, to_path)
-                    os.system(cmd)
-                    if to_path.endswith('.pth'):
-                        try:
-                            torch.load(to_path)
-                        except:
-                            print("Corrupted file at {}".format(to_path))
-                        else:
-                            print("Copied file verified at {}!".format(to_path))
-                            print("Removing original file at {}!".format(from_path))
-                            cmd = 'rm {}'.format(from_path)
-                            os.system(cmd)
+                for from_path, to_path in zip(
+                        [ckpt_prev_curr, ckpt_prev_prev, log_prev_txt, log_prev_curr, log_prev_prev],
+                        [ckpt_curr_curr, ckpt_curr_prev, log_curr_txt, log_curr_curr, log_curr_prev]):
+                    if os.path.isfile(from_path):
+                        print("copying {} to {}".format(from_path, to_path))
+                        cmd = "cp {} {}".format(from_path, to_path)
+                        os.system(cmd)
+                        if to_path.endswith('.pth'):
+                            try:
+                                torch.load(to_path)
+                            except:
+                                print("Corrupted file at {}".format(to_path))
+                            else:
+                                print("Copied file verified at {}!".format(to_path))
+            else:
+                print('No ckpt found at {}'.format(args.resume_from_ckpt))
         else:
-            print('No ckpt found at {}'.format(args.resume_from_ckpt))
+            print('Ckpt already exists at {}. No Resuming.'.format(ckpt_dir))
 
     logger = metaLogger(args)
     logging.basicConfig(
@@ -115,7 +123,6 @@ def main():
     opt, lr_scheduler = get_optim(model, args)
     ckpt_epoch = 1
 
-    ckpt_dir = args.j_dir+"/"+str(args.j_id)+"/"
     if logger.ckpt_status in ['curr', 'prev']:
         ckpt_location = os.path.join(ckpt_dir, "ckpt_"+logger.ckpt_status+".pth")
         if os.path.exists(ckpt_location):
