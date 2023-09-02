@@ -120,28 +120,36 @@ def main_worker(gpu, ngpus_per_node, args):
     print('Load witness model from {} to gpu{}'.format(witness_model_dir, args.gpu))
 
     result = {
-            'pre-test': None,
-            'post-test': None,
-            'pre-rob': None,
-            'post-rob': None,
-            'pre-rob-resnet18': None,
-            'post-rob-resnet18': None,
-            'pre-rob-resnet50': None,
-            'post-rob-resnet50': None,
-            'pre-rob-vgg19_bn': None,
-            'post-rob-vgg19_bn': None,
-            'pre-tnsf-resnet18': None,
-            'post-tnsf-resnet18': None,
-            'pre-tnsf-resnet50': None,
-            'post-tnsf-resnet50': None,
-            'pre-tnsf-vgg19_bn': None,
-            'post-tnsf-vgg19_bn': None,
-            'pre-mean-rob': None,
-            'post-mean-rob': None,
-            'pre-mean-tnsf': None,
-            'post-mean-tnsf': None,
-            'mean-rob-diff': None,
-            'mean-tnsf-diff': None,
+            'pre/test-err': None,
+            'post/test-err': None,
+            'diff/test-err': None,
+            'pre/whitebox-err': None,
+            'post/whitebox-err': None,
+            'diff/whitebox-err': None,
+            'pre/transfer-from-resnet18': None,
+            'post/transfer-from-resnet18': None,
+            'diff/transfer-from-resnet18': None,
+            'pre/transfer-from-resnet50': None,
+            'post/transfer-from-resnet50': None,
+            'diff/transfer-from-resnet50': None,
+            'pre/transfer-from-vgg19_bn': None,
+            'post/transfer-from-vgg19_bn': None,
+            'diff/transfer-from-vgg19_bn': None,
+            'pre/avg-transfer-from': None,
+            'post/avg-transfer-from': None,
+            'diff/avg-transfer-from': None,
+            'pre/transfer-to-resnet18': None,
+            'post/transfer-to-resnet18': None,
+            'diff/transfer-to-resnet18': None,
+            'pre/transfer-to-resnet50': None,
+            'post/transfer-to-resnet50': None,
+            'diff/transfer-to-resnet50': None,
+            'pre/transfer-to-vgg19_bn': None,
+            'post/transfer-to-vgg19_bn': None,
+            'diff/transfer-to-vgg19_bn': None,
+            'pre/avg-transfer-to': None,
+            'post/avg-transfer-to': None,
+            'diff/avg-transfer-to': None,
                 }
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():
@@ -319,31 +327,34 @@ def main_worker(gpu, ngpus_per_node, args):
         logger.save_log()
     dist.barrier()
     
-    for (prefix, model) in zip(['pre', 'post'], [orig_source_model, source_model]):
+    for (prefix, model) in zip(['pre/', 'post/'], [orig_source_model, source_model]):
 
-        if result[prefix + '-test'] is None:
+        if result[prefix + 'test-err'] is None:
             dist.barrier()
             test_acc1, test_acc5 = validate(test_loader, model, criterion, args, is_main_task)
+            _result = 100.-test_acc1
             dist.barrier()
-            result[prefix + '-test'] = test_acc1
+            result[prefix + 'test-err'] = _result
             if is_main_task:
+                print('{}: {:.2f}'.format(prefix + 'test-err', _result))
                 ckpt = { "state_dict": source_model.state_dict(), 'result': result}
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
-        if result[prefix + '-rob'] is None:
+        if result[prefix + 'whitebox-err'] is None:
             dist.barrier()
             test_acc1, test_acc5 = validate(test_loader_1k, model, criterion, args, is_main_task, whitebox=True)
+            _result = 100.-test_acc1
             dist.barrier()
-            result[prefix + '-rob'] = test_acc1
+            result[prefix + 'whitebox-err'] = _result
             if is_main_task:
-                print('{}: {:.2f}'.format(prefix + '-rob', test_acc1))
+                print('{}: {:.2f}'.format(prefix + 'whitebox-err', _result))
                 ckpt = { "state_dict": source_model.state_dict(), 'result': result}
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
         for target_arch in ['resnet18', 'resnet50', 'vgg19_bn']:
-            if result[prefix + '-rob-' + target_arch] is None:
+            if result[prefix + 'transfer-from-' + target_arch] is None:
                 args.arch = target_arch
                 target_model = get_model(args)
                 target_model_dir = root_dir + model_ckpt[args.dataset][target_arch] + '1/model/best_model.pt'
@@ -357,15 +368,16 @@ def main_worker(gpu, ngpus_per_node, args):
                 if args.distributed:
                     val_sampler.set_epoch(27)
                 test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, target_model, source_model, args, is_main_task)
+                _result = 100.-test_acc1
                 dist.barrier()
                 if is_main_task:
-                    result[prefix + '-rob-' + target_arch] = test_acc1
-                    print('{}: {:.2f}'.format(prefix + '-rob-' + target_arch, test_acc1))
+                    result[prefix + 'transfer-from-' + target_arch] = _result
+                    print('{}: {:.2f}'.format(prefix + 'transfer-from-' + target_arch, _result))
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result}
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
 
-            if result[prefix + '-tnsf-' + target_arch] is None:
+            if result[prefix + 'transfer-to-' + target_arch] is None:
                 args.arch = target_arch
                 target_model = get_model(args)
                 target_model_dir = root_dir + model_ckpt[args.dataset][target_arch] + '1/model/best_model.pt'
@@ -379,10 +391,11 @@ def main_worker(gpu, ngpus_per_node, args):
                 if args.distributed:
                     val_sampler.set_epoch(27)
                 test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, source_model, target_model, args, is_main_task)
+                _result = 100.-test_acc1
                 dist.barrier()
                 if is_main_task:
-                    result[prefix + '-tnsf-' + target_arch] = test_acc1
-                    print('{}: {:.2f}'.format(prefix + '-tnsf-' + target_arch, test_acc1))
+                    result[prefix + 'transfer-to-' + target_arch] = _result
+                    print('{}: {:.2f}'.format(prefix + 'transfer-to-' + target_arch, _result))
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result}
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
@@ -391,20 +404,19 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Logging and checkpointing only at the main task (rank0)
     if is_main_task:
-        result['pre-mean-rob'] = (result['pre-rob-resnet18']
-                                +result['pre-rob-resnet50']
-                                +result['pre-rob-vgg19_bn'])/3
-        result['post-mean-rob'] = (result['post-rob-resnet18']
-                                +result['post-rob-resnet50']
-                                +result['post-rob-vgg19_bn'])/3
-        result['pre-mean-tnsf'] = (result['pre-tnsf-resnet18']
-                                    +result['pre-tnsf-resnet50']
-                                    +result['pre-tnsf-vgg19_bn'])/3
-        result['post-mean-tnsf'] = (result['post-tnsf-resnet18']
-                                    +result['post-tnsf-resnet50']
-                                    +result['post-tnsf-vgg19_bn'])/3
-        result['mean-rob-diff'] = result['pre-mean-rob'] - result['post-mean-rob']
-        result['mean-tnsf-diff'] = result['pre-mean-tnsf'] - result['post-mean-tnsf']
+        for _metric in ['test-err', 'whitebox-err', 'transfer-from-', 'transfer-to-']:
+            if _metric in ['transfer-from-', 'transfer-to-']:
+                for _arch in ['resnet18', 'resnet50', 'vgg19_bn']:
+                    result['diff/{}{}'.format(_metric, _arch)] = result['post/{}{}'.format(_metric, _arch)] - result['pre/{}{}'.format(_metric, _arch)]
+            else:
+                result['diff/{}'.format(_metric)] = result['post/{}'.format(_metric)] - result['pre/{}'.format(_metric)]
+
+        for _metric in ['avg-transfer-from', 'avg-transfer-to']:
+            for _prefix in ['pre/', 'post/', 'diff/']:
+                _result = 0
+                for _arch in ['-resnet18', '-resnet50', '-vgg19_bn']:
+                    _result += result[_prefix+_metric[4:]+_arch]/3.
+                result[_prefix+_metric] = _result
 
         for key in result.keys():
             logger.add_scalar(key, result[key], _epoch)
@@ -460,7 +472,7 @@ def match_kl(train_loader, source_model, witness_model, criterion, optimizer, ep
         param = {'ord': np.inf,
               'epsilon': 4./255.,
               'alpha': 1./255.,
-              'num_iter': 4,
+              'num_iter': 10,
               'restarts': 1,
               'rand_init': True,
               'clip': True,
@@ -524,7 +536,7 @@ def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
         param = {'ord': np.inf,
               'epsilon': 4./255.,
               'alpha': 1./255.,
-              'num_iter': 4,
+              'num_iter': 20,
               'restarts': 1,
               'rand_init': True,
               'clip': True,
@@ -602,7 +614,7 @@ def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
     param = {'ord': np.inf,
           'epsilon': 4./255.,
           'alpha': 1./255.,
-          'num_iter': 4,
+          'num_iter': 20,
           'restarts': 1,
           'rand_init': True,
           'clip': True,
