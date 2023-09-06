@@ -6,6 +6,9 @@ import ipdb
 from tqdm import trange
 from autoattack import AutoAttack
 import numpy as np
+from src.utils_log import Summary, AverageMeter, ProgressMeter
+import time
+from torch.utils.data import Subset
 
 CORRUPTIONS_CIFAR10=['brightness',
                      'gaussian_noise',
@@ -48,20 +51,57 @@ CORRUPTIONS_IMAGENET_C=['brightness',
                         'zoom_blur'
                        ]
 
-def accuracy(output, target, topk=(1, )):
-    """Computes the precision@k for the specified values of k"""
-    maxk = max(topk)
-    batch_size = target.size(0)
+# def accuracy(output, target, topk=(1, )):
+    # """Computes the precision@k for the specified values of k"""
+    # maxk = max(topk)
+    # batch_size = target.size(0)
 
-    _, pred = output.topk(maxk, 1, True, True)
-    pred = pred.t()
-    correct = pred.eq(target.reshape(1, -1).expand_as(pred))
+    # _, pred = output.topk(maxk, 1, True, True)
+    # pred = pred.t()
+    # correct = pred.eq(target.reshape(1, -1).expand_as(pred))
 
-    res = []
-    for k in topk:
-        correct_k = correct[:k].reshape(-1).float().sum(0)
-        res.append(correct_k.mul_(100.0 / batch_size))
-    return res
+    # res = []
+    # for k in topk:
+        # correct_k = correct[:k].reshape(-1).float().sum(0)
+        # res.append(correct_k.mul_(100.0 / batch_size))
+    # return res
+
+def accuracy(output, target, topk=(1,)):
+    """Computes the accuracy over the k top predictions for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
+
+def return_qualified(p_0, p_1, p_adv_0, p_adv_1, target):
+    """Computes the accuracy over the k top predictions for the specified values of k"""
+    with torch.no_grad():
+        _, pred_0 = p_0.topk(1, 1, True, True)
+        _, pred_1 = p_1.topk(1, 1, True, True)
+        _, pred_adv_0 = p_adv_0.topk(1, 1, True, True)
+        _, pred_adv_1 = p_adv_1.topk(1, 1, True, True)
+
+        pred_0 = pred_0.t()
+        pred_1 = pred_1.t()
+        pred_adv_0 = pred_adv_0.t()
+        pred_adv_1 = pred_adv_1.t()
+
+        correct_0 = pred_0.eq(target.view(1, -1).expand_as(pred_0)).squeeze()
+        correct_1 = pred_1.eq(target.view(1, -1).expand_as(pred_0)).squeeze()
+        incorrect_0 = pred_adv_0.ne(target.view(1, -1).expand_as(pred_0)).squeeze()
+        incorrect_1 = pred_adv_1.ne(target.view(1, -1).expand_as(pred_0)).squeeze()
+        qualified = correct_0.eq(correct_1).eq(incorrect_0).eq(incorrect_1)
+
+        return qualified
 
 def test_clean(loader, model, device):
     total_loss, total_correct = 0., 0.
@@ -348,4 +388,282 @@ def eval_CE(base_acc, f_acc):
         rel_mCE.append(((100-f_acc[i])-(100-f_acc[0]))/((100-base_acc[i])-(100-base_acc[0])))
 
     return np.array(mCE).mean(), np.array(rel_mCE).mean()
+
+
+def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
+    param = {'ord': np.inf,
+          'epsilon': 4./255.,
+          'alpha': 1./255.,
+          'num_iter': 20,
+          'restarts': 1,
+          'rand_init': True,
+          'clip': True,
+          'loss_fn': nn.CrossEntropyLoss(),
+          'dataset': args.dataset}
+    param['num_iter'] = 1 if args.debug else 20
+    attacker = pgd(**param)
+    num_eval = 100 if args.debug else 1000
+
+    def run_validate_one_epoch(images, target, base_progress=0):
+        end = time.time()
+        if args.gpu is not None and torch.cuda.is_available():
+            images = images.cuda(args.gpu, non_blocking=True)
+        if torch.backends.mps.is_available():
+            images = images.to('mps')
+            target = target.to('mps')
+        if torch.cuda.is_available():
+            target = target.cuda(args.gpu, non_blocking=True)
+
+        with ctx_noparamgrad_and_eval(source_model):
+            delta_s = attacker.generate(source_model, images, target)
+
+        with ctx_noparamgrad_and_eval(target_model):
+            delta_t = attacker.generate(target_model, images, target)
+
+        # compute output
+        with torch.no_grad():
+            p_s = source_model(images)
+            p_t = target_model(images)
+            p_adv_s = source_model(images+delta_s)
+            p_adv_t = target_model(images+delta_t)
+            qualified = return_qualified(p_s, p_t, p_adv_s, p_adv_t, target)
+
+            p_transfer = target_model((images+delta_s)[qualified, ::])
+
+        # measure accuracy and record loss
+        num_qualified = qualified.sum().item()
+        acc1, acc5 = accuracy(p_transfer, target[qualified], topk=(1, 5))
+        top1.update(acc1[0], num_qualified)
+        top5.update(acc5[0], num_qualified)
+        total_qualified.update(num_qualified)
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
+    top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    total_qualified = AverageMeter('Total Qualified', ':6.2f', Summary.SUM)
+    progress = ProgressMeter(
+        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        [batch_time, top1, top5, total_qualified],
+        prefix='Transfer: ')
+
+    # switch to evaluate mode
+    source_model.eval()
+    target_model.eval()
+
+    for i, (images, target) in enumerate(val_loader):
+        run_validate_one_epoch(images, target)
+
+        if is_main_task:
+            progress.display(i + 1)
+
+        if args.distributed:
+            total_qualified.all_reduce()
+
+        if total_qualified.sum > (num_eval/args.ngpus_per_node):
+            break
+
+    if args.distributed:
+        top1.all_reduce()
+        top5.all_reduce()
+
+    # if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
+        # aux_val_dataset = Subset(val_loader.dataset,
+                                 # range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
+        # aux_val_loader = torch.utils.data.DataLoader(
+            # aux_val_dataset, batch_size=args.batch_size, shuffle=False,
+            # num_workers=args.workers, pin_memory=True)
+        # run_validate(aux_val_loader, len(val_loader))
+
+    if is_main_task:
+        progress.display_summary()
+
+    return top1.avg, top5.avg
+
+def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
+    if whitebox:
+        param = {'ord': np.inf,
+              'epsilon': 4./255.,
+              'alpha': 1./255.,
+              'num_iter': 20,
+              'restarts': 1,
+              'rand_init': True,
+              'clip': True,
+              'loss_fn': nn.CrossEntropyLoss(),
+              'dataset': args.dataset}
+        param['num_iter'] = 1 if args.debug else 20
+        attacker = pgd(**param)
+
+
+    def run_validate(loader, base_progress=0):
+        end = time.time()
+        for i, (images, target) in enumerate(loader):
+            i = base_progress + i
+            if args.gpu is not None and torch.cuda.is_available():
+                images = images.cuda(args.gpu, non_blocking=True)
+            if torch.backends.mps.is_available():
+                images = images.to('mps')
+                target = target.to('mps')
+            if torch.cuda.is_available():
+                target = target.cuda(args.gpu, non_blocking=True)
+
+            if whitebox:
+                with ctx_noparamgrad_and_eval(model):
+                    delta = attacker.generate(model, images, target)
+            else:
+                delta = 0
+
+            # compute output
+            with torch.no_grad():
+                output = model(images+delta)
+                loss = criterion(output, target)
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            losses.update(loss.item(), images.size(0))
+            top1.update(acc1[0], images.size(0))
+            top5.update(acc5[0], images.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0 and is_main_task:
+                progress.display(i + 1)
+            if args.debug:
+                break
+
+    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
+    losses = AverageMeter('Loss', ':.4e', Summary.NONE)
+    top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    progress = ProgressMeter(
+        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        [batch_time, losses, top1, top5],
+        prefix='Test: ')
+
+    # switch to evaluate mode
+    model.eval()
+
+    run_validate(val_loader)
+    if args.distributed:
+        top1.all_reduce()
+        top5.all_reduce()
+
+    if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
+        aux_val_dataset = Subset(val_loader.dataset,
+                                 range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
+        aux_val_loader = torch.utils.data.DataLoader(
+            aux_val_dataset, batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
+        run_validate(aux_val_loader, len(val_loader))
+
+    if is_main_task:
+        progress.display_summary()
+
+    return top1.avg, top5.avg
+
+def eval_transfer_bi_direction(val_loader, model_a, model_b, args, is_main_task):
+    param = {'ord': np.inf,
+  'epsilon': 4./255.,
+          'alpha': 1./255.,
+          'num_iter': 20,
+          'restarts': 1,
+          'rand_init': True,
+          'clip': True,
+          'loss_fn': nn.CrossEntropyLoss(),
+          'dataset': args.dataset}
+    param['num_iter'] = 1 if args.debug else 20
+    attacker = pgd(**param)
+    num_eval = 100 if args.debug else 1000
+
+    def run_validate_one_epoch(images, target, base_progress=0):
+        end = time.time()
+        if args.gpu is not None and torch.cuda.is_available():
+            images = images.cuda(args.gpu, non_blocking=True)
+        if torch.backends.mps.is_available():
+            images = images.to('mps')
+            target = target.to('mps')
+        if torch.cuda.is_available():
+            target = target.cuda(args.gpu, non_blocking=True)
+
+        with ctx_noparamgrad_and_eval(model_a):
+            delta_a = attacker.generate(model_a, images, target)
+
+        with ctx_noparamgrad_and_eval(model_b):
+            delta_b = attacker.generate(model_b, images, target)
+
+        # compute output
+        with torch.no_grad():
+            p_a = model_a(images)
+            p_b = model_b(images)
+            p_adv_a = model_a(images+delta_a)
+            p_adv_b = model_b(images+delta_b)
+            qualified = return_qualified(p_a, p_b, p_adv_a, p_adv_b, target)
+
+            p_b2a = model_a((images+delta_b)[qualified, ::])
+            p_a2b = model_b((images+delta_a)[qualified, ::])
+
+        # measure accuracy and record loss
+        num_qualified = qualified.sum().item()
+        acc1_b2a, acc5_b2a = accuracy(p_b2a, target[qualified], topk=(1, 5))
+        acc1_a2b, acc5_a2b = accuracy(p_a2b, target[qualified], topk=(1, 5))
+        top1_b2a.update(acc1_b2a[0], num_qualified)
+        top5_b2a.update(acc5_b2a[0], num_qualified)
+        top1_a2b.update(acc1_a2b[0], num_qualified)
+        top5_a2b.update(acc5_a2b[0], num_qualified)
+        total_qualified.update(num_qualified)
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
+    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top1_a2b = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    top5_a2b = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    total_qualified = AverageMeter('Total Qualified', ':6.2f', Summary.SUM)
+    progress = ProgressMeter(
+        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        [batch_time, top1_a2b, top5_a2b, top1_b2a, top5_b2a, total_qualified],
+        prefix='Transfer: ')
+
+    # switch to evaluate mode
+    model_a.eval()
+    model_b.eval()
+
+    for i, (images, target) in enumerate(val_loader):
+        run_validate_one_epoch(images, target)
+
+        if is_main_task:
+            progress.display(i + 1)
+
+        if args.distributed:
+            total_qualified.all_reduce()
+
+        if total_qualified.sum > (num_eval/args.ngpus_per_node):
+            break
+
+    if args.distributed:
+        top1_b2a.all_reduce()
+        top1_a2b.all_reduce()
+        top5_b2a.all_reduce()
+        top5_a2b.all_reduce()
+
+    # if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
+        # aux_val_dataset = Subset(val_loader.dataset,
+                                 # range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
+        # aux_val_loader = torch.utils.data.DataLoader(
+            # aux_val_dataset, batch_size=args.batch_size, shuffle=False,
+            # num_workers=args.workers, pin_memory=True)
+        # run_validate(aux_val_loader, len(val_loader))
+
+    if is_main_task:
+        progress.display_summary()
+
+    return top1_a2b.avg, top1_b2a.avg
 
