@@ -98,7 +98,7 @@ def parse_args():
                         'N processes per node, which has N GPUs. This is the '
                         'fastest way to use PyTorch for either single node or '
                         'multi node data parallel training')
-    parser.add_argument('--optimize_cluster_param',
+    parser.add_argument('--debug',
                         default=False, type=distutils.util.strtobool)
     parser.add_argument("--print_freq",
                         default=argparse.SUPPRESS, type=int)
@@ -109,9 +109,9 @@ def parse_args():
     parser.add_argument("--label_smoothing",
                         default=0., type=float)
     parser.add_argument('--mixup_alpha',
-                        default=argparse.SUPPRESS, type=float)
+                        default=0., type=float)
     parser.add_argument('--cutmix_alpha',
-                        default=argparse.SUPPRESS, type=float)
+                        default=0., type=float)
     parser.add_argument('--clip_grad_norm',
                         default=None, type=float)
     parser.add_argument('--use-v2',
