@@ -27,6 +27,8 @@ from src.attacks import pgd
 from src.context import ctx_noparamgrad_and_eval
 import torch.nn.functional as F
 import ipdb
+from src.evaluation import validate, eval_transfer, eval_transfer_bi_direction
+from src.transfer import match_kl_imagenet
 
 best_acc1 = 0
 root_dir = '/scratch/hdd001/home/ama/improve-transferability/'
@@ -305,7 +307,7 @@ def main_worker(gpu, ngpus_per_node, args):
         # for _epoch in range(ckpt_epoch, args.epoch+1):
         if args.distributed:
             train_sampler.set_epoch(_epoch)
-        train_acc1, train_acc5, loss = match_kl(train_loader,
+        train_acc1, train_acc5, loss = match_kl_imagenet(train_loader,
                                                 source_model,
                                                 witness_model,
                                                 criterion,
@@ -367,35 +369,20 @@ def main_worker(gpu, ngpus_per_node, args):
                 dist.barrier()
                 if args.distributed:
                     val_sampler.set_epoch(27)
-                test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, target_model, source_model, args, is_main_task)
-                _result = 100.-test_acc1
+                test_acc1_target2source, test_acc1_source2target = eval_transfer_bi_direction(
+                                                                    test_loader_shuffle,
+                                                                    model_a=target_model,
+                                                                    model_b=source_model,
+                                                                    args=args,
+                                                                    is_main_task=is_main_task)
+                _result_target2source = 100.-test_acc1_target2source
+                _result_source2target = 100.-test_acc1_source2target
                 dist.barrier()
                 if is_main_task:
-                    result[prefix + 'transfer-from-' + target_arch] = _result
-                    print('{}: {:.2f}'.format(prefix + 'transfer-from-' + target_arch, _result))
-                    ckpt = { "state_dict": source_model.state_dict(), 'result': result}
-                    rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
-                    logger.save_log()
-
-            if result[prefix + 'transfer-to-' + target_arch] is None:
-                args.arch = target_arch
-                target_model = get_model(args)
-                target_model_dir = root_dir + model_ckpt[args.dataset][target_arch] + '1/model/best_model.pt'
-                loc = 'cuda:{}'.format(args.gpu)
-                ckpt = remove_module(torch.load(target_model_dir, map_location=loc))
-                target_model.load_state_dict(ckpt)
-                target_model.cuda(args.gpu)
-                target_model = torch.nn.parallel.DistributedDataParallel(target_model, device_ids=[args.gpu])
-
-                dist.barrier()
-                if args.distributed:
-                    val_sampler.set_epoch(27)
-                test_acc1, test_acc5 = eval_transfer(test_loader_shuffle, source_model, target_model, args, is_main_task)
-                _result = 100.-test_acc1
-                dist.barrier()
-                if is_main_task:
-                    result[prefix + 'transfer-to-' + target_arch] = _result
-                    print('{}: {:.2f}'.format(prefix + 'transfer-to-' + target_arch, _result))
+                    result[prefix + 'transfer-from-' + target_arch] = _result_target2source
+                    print('{}: {:.2f}'.format(prefix + 'transfer-from-' + target_arch, _result_target2source))
+                    result[prefix + 'transfer-to-' + target_arch] = _result_source2target
+                    print('{}: {:.2f}'.format(prefix + 'transfer-to-' + target_arch, _result_source2target))
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result}
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
@@ -451,372 +438,6 @@ def main_worker(gpu, ngpus_per_node, args):
     # delete slurm checkpoints
     delCheckpoint(args.j_dir, args.j_id)
     ddp_cleanup()
-
-def match_kl(train_loader, source_model, witness_model, criterion, optimizer, epoch, device, args, is_main_task):
-    batch_time = AverageMeter('Time', ':6.3f')
-    data_time = AverageMeter('Data', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
-    progress = ProgressMeter(
-        len(train_loader),
-        [batch_time, data_time, losses, top1, top5],
-        prefix="Epoch: [{}]".format(epoch))
-
-    # switch to train mode
-    source_model.train()
-    witness_model.eval()
-    kl_loss = nn.KLDivLoss(reduction="batchmean", log_target=True)
-
-    if args.noise_type != 'none':
-        param = {'ord': np.inf,
-              'epsilon': 4./255.,
-              'alpha': 1./255.,
-              'num_iter': 10,
-              'restarts': 1,
-              'rand_init': True,
-              'clip': True,
-              'loss_fn': nn.CrossEntropyLoss(),
-              'dataset': args.dataset}
-        if args.noise_type == 'rand_init':
-            param['num_iter'] = 0
-        elif args.noise_type.startswith('pgd'):
-            _itr = args.noise_type[3:-6] if args.noise_type.endswith('indep') else args.noise_type[3::]
-            param['num_iter'] = int(_itr)
-        attacker = pgd(**param)
-
-    end = time.time()
-    for i, (images, target) in enumerate(train_loader):
-        # measure data loading time
-        data_time.update(time.time() - end)
-
-        # move data to the same device as model
-        images = images.to(device, non_blocking=True)
-        target = target.to(device, non_blocking=True)
-
-        if args.noise_type != 'none':
-            with ctx_noparamgrad_and_eval(source_model):
-                delta = attacker.generate(source_model, images, target)
-        else:
-            delta = 0
-
-        # compute output
-        p_s = source_model(images+delta)
-        yp_s = F.log_softmax(p_s, dim=1)
-
-        with ctx_noparamgrad_and_eval(witness_model):
-            yp_w = F.log_softmax(witness_model(images+delta), dim=1)
-            if args.misalign:
-                loss = -(kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s))
-            else:
-                loss = (kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s))
-
-        # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        # measure accuracy and record loss
-        acc1, acc5 = accuracy(p_s, target, topk=(1, 5))
-        losses.update(loss.item(), images.size(0))
-        top1.update(acc1[0], images.size(0))
-        top5.update(acc5[0], images.size(0))
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        if i % args.print_freq == 0 and is_main_task:
-            progress.display(i + 1)
-
-    return top1.avg, top5.avg, losses.avg
-
-def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
-    if whitebox:
-        param = {'ord': np.inf,
-              'epsilon': 4./255.,
-              'alpha': 1./255.,
-              'num_iter': 20,
-              'restarts': 1,
-              'rand_init': True,
-              'clip': True,
-              'loss_fn': nn.CrossEntropyLoss(),
-              'dataset': args.dataset}
-        attacker = pgd(**param)
-
-    def run_validate(loader, base_progress=0):
-        end = time.time()
-        for i, (images, target) in enumerate(loader):
-            i = base_progress + i
-            if args.gpu is not None and torch.cuda.is_available():
-                images = images.cuda(args.gpu, non_blocking=True)
-            if torch.backends.mps.is_available():
-                images = images.to('mps')
-                target = target.to('mps')
-            if torch.cuda.is_available():
-                target = target.cuda(args.gpu, non_blocking=True)
-
-            if whitebox:
-                with ctx_noparamgrad_and_eval(model):
-                    delta = attacker.generate(model, images, target)
-            else:
-                delta = 0
-
-            # compute output
-            with torch.no_grad():
-                output = model(images+delta)
-                loss = criterion(output, target)
-
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            losses.update(loss.item(), images.size(0))
-            top1.update(acc1[0], images.size(0))
-            top5.update(acc5[0], images.size(0))
-
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
-
-            if i % args.print_freq == 0 and is_main_task:
-                progress.display(i + 1)
-
-    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
-    losses = AverageMeter('Loss', ':.4e', Summary.NONE)
-    top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-    top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
-    progress = ProgressMeter(
-        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
-        [batch_time, losses, top1, top5],
-        prefix='Test: ')
-
-    # switch to evaluate mode
-    model.eval()
-
-    run_validate(val_loader)
-    if args.distributed:
-        top1.all_reduce()
-        top5.all_reduce()
-
-    if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
-        aux_val_dataset = Subset(val_loader.dataset,
-                                 range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
-        aux_val_loader = torch.utils.data.DataLoader(
-            aux_val_dataset, batch_size=args.batch_size, shuffle=False,
-            num_workers=args.workers, pin_memory=True)
-        run_validate(aux_val_loader, len(val_loader))
-
-    if is_main_task:
-        progress.display_summary()
-
-    return top1.avg, top5.avg
-
-def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
-    param = {'ord': np.inf,
-          'epsilon': 4./255.,
-          'alpha': 1./255.,
-          'num_iter': 20,
-          'restarts': 1,
-          'rand_init': True,
-          'clip': True,
-          'loss_fn': nn.CrossEntropyLoss(),
-          'dataset': args.dataset}
-    attacker = pgd(**param)
-    num_eval = 1000
-
-    def run_validate_one_epoch(images, target, base_progress=0):
-        end = time.time()
-        if args.gpu is not None and torch.cuda.is_available():
-            images = images.cuda(args.gpu, non_blocking=True)
-        if torch.backends.mps.is_available():
-            images = images.to('mps')
-            target = target.to('mps')
-        if torch.cuda.is_available():
-            target = target.cuda(args.gpu, non_blocking=True)
-
-        with ctx_noparamgrad_and_eval(source_model):
-            delta_s = attacker.generate(source_model, images, target)
-
-        with ctx_noparamgrad_and_eval(target_model):
-            delta_t = attacker.generate(target_model, images, target)
-
-        # compute output
-        with torch.no_grad():
-            p_s = source_model(images)
-            p_t = target_model(images)
-            p_adv_s = source_model(images+delta_s)
-            p_adv_t = target_model(images+delta_t)
-            qualified = return_qualified(p_s, p_t, p_adv_s, p_adv_t, target)
-
-            p_transfer = target_model((images+delta_s)[qualified, ::])
-
-        # measure accuracy and record loss
-        num_qualified = qualified.sum().item()
-        acc1, acc5 = accuracy(p_transfer, target[qualified], topk=(1, 5))
-        top1.update(acc1[0], num_qualified)
-        top5.update(acc5[0], num_qualified)
-        total_qualified.update(num_qualified)
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-
-    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
-    top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-    top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
-    total_qualified = AverageMeter('Total Qualified', ':6.2f', Summary.SUM)
-    progress = ProgressMeter(
-        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
-        [batch_time, top1, top5, total_qualified],
-        prefix='Transfer: ')
-
-    # switch to evaluate mode
-    source_model.eval()
-    target_model.eval()
-
-    for i, (images, target) in enumerate(val_loader):
-        run_validate_one_epoch(images, target)
-
-        if is_main_task:
-            progress.display(i + 1)
-
-        if args.distributed:
-            total_qualified.all_reduce()
-
-        if total_qualified.sum > (num_eval/args.ngpus_per_node):
-            break
-
-    if args.distributed:
-        top1.all_reduce()
-        top5.all_reduce()
-
-    # if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
-        # aux_val_dataset = Subset(val_loader.dataset,
-                                 # range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
-        # aux_val_loader = torch.utils.data.DataLoader(
-            # aux_val_dataset, batch_size=args.batch_size, shuffle=False,
-            # num_workers=args.workers, pin_memory=True)
-        # run_validate(aux_val_loader, len(val_loader))
-
-    if is_main_task:
-        progress.display_summary()
-
-    return top1.avg, top5.avg
-
-class Summary(Enum):
-    NONE = 0
-    AVERAGE = 1
-    SUM = 2
-    COUNT = 3
-
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-    def __init__(self, name, fmt=':f', summary_type=Summary.AVERAGE):
-        self.name = name
-        self.fmt = fmt
-        self.summary_type = summary_type
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-    def all_reduce(self):
-        if torch.cuda.is_available():
-            device = torch.device("cuda")
-        elif torch.backends.mps.is_available():
-            device = torch.device("mps")
-        else:
-            device = torch.device("cpu")
-        total = torch.tensor([self.sum, self.count], dtype=torch.float32, device=device)
-        dist.all_reduce(total, dist.ReduceOp.SUM, async_op=False)
-        self.sum, self.count = total.tolist()
-        self.avg = self.sum / self.count
-
-    def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
-        return fmtstr.format(**self.__dict__)
-
-    def summary(self):
-        fmtstr = ''
-        if self.summary_type is Summary.NONE:
-            fmtstr = ''
-        elif self.summary_type is Summary.AVERAGE:
-            fmtstr = '{name} {avg:.3f}'
-        elif self.summary_type is Summary.SUM:
-            fmtstr = '{name} {sum:.3f}'
-        elif self.summary_type is Summary.COUNT:
-            fmtstr = '{name} {count:.3f}'
-        else:
-            raise ValueError('invalid summary type %r' % self.summary_type)
-
-        return fmtstr.format(**self.__dict__)
-
-class ProgressMeter(object):
-    def __init__(self, num_batches, meters, prefix=""):
-        self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
-        self.meters = meters
-        self.prefix = prefix
-
-    def display(self, batch):
-        entries = [self.prefix + self.batch_fmtstr.format(batch)]
-        entries += [str(meter) for meter in self.meters]
-        print('\t'.join(entries))
-
-    def display_summary(self):
-        entries = [" *"]
-        entries += [meter.summary() for meter in self.meters]
-        print(' '.join(entries))
-
-    def _get_batch_fmtstr(self, num_batches):
-        num_digits = len(str(num_batches // 1))
-        fmt = '{:' + str(num_digits) + 'd}'
-        return '[' + fmt + '/' + fmt.format(num_batches) + ']'
-
-def accuracy(output, target, topk=(1,)):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
-    with torch.no_grad():
-        maxk = max(topk)
-        batch_size = target.size(0)
-
-        _, pred = output.topk(maxk, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-        res = []
-        for k in topk:
-            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
-            res.append(correct_k.mul_(100.0 / batch_size))
-        return res
-
-def return_qualified(p_0, p_1, p_adv_0, p_adv_1, target):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
-    with torch.no_grad():
-        _, pred_0 = p_0.topk(1, 1, True, True)
-        _, pred_1 = p_1.topk(1, 1, True, True)
-        _, pred_adv_0 = p_adv_0.topk(1, 1, True, True)
-        _, pred_adv_1 = p_adv_1.topk(1, 1, True, True)
-
-        pred_0 = pred_0.t()
-        pred_1 = pred_1.t()
-        pred_adv_0 = pred_adv_0.t()
-        pred_adv_1 = pred_adv_1.t()
-
-        correct_0 = pred_0.eq(target.view(1, -1).expand_as(pred_0)).squeeze()
-        correct_1 = pred_1.eq(target.view(1, -1).expand_as(pred_0)).squeeze()
-        incorrect_0 = pred_adv_0.ne(target.view(1, -1).expand_as(pred_0)).squeeze()
-        incorrect_1 = pred_adv_1.ne(target.view(1, -1).expand_as(pred_0)).squeeze()
-        qualified = correct_0.eq(correct_1).eq(incorrect_0).eq(incorrect_1)
-
-        return qualified
 
 def remove_module(state_dict):
     # create new OrderedDict that does not contain `module.`
