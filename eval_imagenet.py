@@ -28,7 +28,7 @@ from src.context import ctx_noparamgrad_and_eval
 import torch.nn.functional as F
 import ipdb
 from src.evaluation import validate, eval_transfer, eval_transfer_bi_direction
-from src.transfer import match_kl_imagenet
+from src.transfer import model_align
 
 best_acc1 = 0
 root_dir = '/scratch/hdd001/home/ama/improve-transferability/'
@@ -307,12 +307,10 @@ def main_worker(gpu, ngpus_per_node, args):
         # for _epoch in range(ckpt_epoch, args.epoch+1):
         if args.distributed:
             train_sampler.set_epoch(_epoch)
-        train_acc1, train_acc5, loss = match_kl_imagenet(train_loader,
+        train_acc1, train_acc5, loss = model_align(train_loader,
                                                 source_model,
                                                 witness_model,
-                                                criterion,
                                                 opt,
-                                                _epoch,
                                                 device,
                                                 args,
                                                 is_main_task)
