@@ -58,11 +58,6 @@ def parse_args():
     parser.add_argument('--enable_wandb',
                         default=argparse.SUPPRESS, type=distutils.util.strtobool)
 
-    # for adversarial training, we just need to specify pgd steps
-    # parser.add_argument("--pgd_steps",
-                            # default=argparse.SUPPRESS, type=int)
-    # parser.add_argument("--pgd_eps",
-                            # default=argparse.SUPPRESS, type=float)
 
     parser.add_argument('--eval_AA',
                         default=argparse.SUPPRESS, type=distutils.util.strtobool)
@@ -153,6 +148,23 @@ def parse_args():
                         default=False, type=distutils.util.strtobool)
     parser.add_argument("--ce_regularized",
                         default=False, type=distutils.util.strtobool)
+    # the following pgd params are used in whitebox and transfer evaluations
+    # if alignment is performed at pgd perturbed datapoint, the same pgd_eps, pgd_alpha
+    # will be used, the number of iteration is specified in ${noise_type}
+    parser.add_argument("--pgd_itr",
+                            default=20, type=int)
+    parser.add_argument("--pgd_eps",
+                            default=4./255., type=float)
+    parser.add_argument("--pgd_alpha",
+                            default=1./255., type=float)
+
+    parser.add_argument("--rkd_dist_ratio",
+                            default=1., type=float)
+    parser.add_argument("--rkd_angle_ratio",
+                            default=2., type=float)
+
+
+
 
 
     args = parser.parse_args()
