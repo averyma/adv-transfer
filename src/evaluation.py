@@ -392,15 +392,15 @@ def eval_CE(base_acc, f_acc):
 
 def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
     param = {'ord': np.inf,
-          'epsilon': 4./255.,
-          'alpha': 1./255.,
-          'num_iter': 20,
-          'restarts': 1,
-          'rand_init': True,
-          'clip': True,
-          'loss_fn': nn.CrossEntropyLoss(),
-          'dataset': args.dataset}
-    param['num_iter'] = 1 if args.debug else 20
+             'epsilon': args.pgd_eps,
+             'alpha': args.pgd_alpha,
+             'num_iter': args.pgd_itr,
+             'restarts': 1,
+             'rand_init': True,
+             'clip': True,
+             'loss_fn': nn.CrossEntropyLoss(),
+             'dataset': args.dataset}
+    param['num_iter'] = 1 if args.debug else args.pgd_itr
     attacker = pgd(**param)
     num_eval = 100 if args.debug else 1000
 
@@ -486,15 +486,15 @@ def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
 def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
     if whitebox:
         param = {'ord': np.inf,
-              'epsilon': 4./255.,
-              'alpha': 1./255.,
-              'num_iter': 20,
+              'epsilon': args.pgd_eps,
+              'alpha': args.pgd_alpha,
+              'num_iter': args.pgd_itr,
               'restarts': 1,
               'rand_init': True,
               'clip': True,
               'loss_fn': nn.CrossEntropyLoss(),
               'dataset': args.dataset}
-        param['num_iter'] = 1 if args.debug else 20
+        param['num_iter'] = 1 if args.debug else args.pgd_itr
         attacker = pgd(**param)
 
 
@@ -568,15 +568,15 @@ def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
 
 def eval_transfer_bi_direction(val_loader, model_a, model_b, args, is_main_task):
     param = {'ord': np.inf,
-  'epsilon': 4./255.,
-          'alpha': 1./255.,
-          'num_iter': 20,
-          'restarts': 1,
-          'rand_init': True,
-          'clip': True,
-          'loss_fn': nn.CrossEntropyLoss(),
-          'dataset': args.dataset}
-    param['num_iter'] = 1 if args.debug else 20
+             'epsilon': args.pgd_eps,
+             'alpha': args.pgd_alpha,
+             'num_iter': args.pgd_itr,
+             'restarts': 1,
+             'rand_init': True,
+             'clip': True,
+             'loss_fn': nn.CrossEntropyLoss(),
+             'dataset': args.dataset}
+    param['num_iter'] = 1 if args.debug else args.pgd_itr
     attacker = pgd(**param)
     num_eval = 100 if args.debug else 1000
 
