@@ -251,7 +251,7 @@ def match_kl_jacobian(loader, opt, args, source_model, list_witness_model, devic
 
     total_loss = total_loss / len(loader.dataset)
 
-def match_kl_imagenet(train_loader, source_model, witness_model, criterion, optimizer, epoch, device, args, is_main_task):
+def model_align(train_loader, source_model, witness_model, optimizer, device, args, is_main_task):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -260,23 +260,24 @@ def match_kl_imagenet(train_loader, source_model, witness_model, criterion, opti
     progress = ProgressMeter(
         len(train_loader),
         [batch_time, data_time, losses, top1, top5],
-        prefix="Epoch: [{}]".format(epoch))
+        prefix="Align Epoch: [{}]".format(0))
 
     # switch to train mode
     source_model.train()
     witness_model.eval()
     kl_loss = nn.KLDivLoss(reduction="batchmean", log_target=True)
+    cos = nn.CosineSimilarity(dim=1, eps=1e-6)
 
     if args.noise_type != 'none':
         param = {'ord': np.inf,
-              'epsilon': 4./255.,
-              'alpha': 1./255.,
-              'num_iter': 10,
-              'restarts': 1,
-              'rand_init': True,
-              'clip': True,
-              'loss_fn': nn.CrossEntropyLoss(),
-              'dataset': args.dataset}
+                 'epsilon': 4./255.,
+                 'alpha': 1./255.,
+                 'num_iter': 10,
+                 'restarts': 1,
+                 'rand_init': True,
+                 'clip': True,
+                 'loss_fn': nn.CrossEntropyLoss(),
+                 'dataset': args.dataset}
         if args.noise_type == 'rand_init':
             param['num_iter'] = 0
         elif args.noise_type.startswith('pgd'):
@@ -299,17 +300,59 @@ def match_kl_imagenet(train_loader, source_model, witness_model, criterion, opti
         else:
             delta = 0
 
-        # compute output
-        p_s = source_model(images+delta)
-        yp_s = F.log_softmax(p_s, dim=1)
+        if args.method == 'kl':
+            # compute output
+            p_s = source_model(images+delta)
+            yp_s = F.log_softmax(p_s, dim=1)
 
-        with ctx_noparamgrad_and_eval(witness_model):
-            yp_w = F.log_softmax(witness_model(images+delta), dim=1)
-            if args.misalign:
-                loss = -(kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s))
-            else:
-                loss = (kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s))
+            with ctx_noparamgrad_and_eval(witness_model):
+                p_w = witness_model(images+delta)
+                yp_w = F.log_softmax(p_w, dim=1)
+            loss = kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s)
 
+        elif args.method == 'jacobian':
+            dim = images.size(1)*images.size(2)*images.size(3)
+
+            images_s = (images+delta).clone().detach()
+            images_s.requires_grad=True
+
+            p_s = source_model(images_s)
+            loss_s = nn.CrossEntropyLoss()(p_s, target)
+            dldx_s = images.size(0) * grad(loss_s, images_s, create_graph=True)[0].view(-1, dim)
+
+            images_w = images_s.clone().detach()
+            images_w.requires_grad=True
+
+            with ctx_noparamgrad_and_eval(witness_model):
+                p_w = witness_model(images_w)
+                loss_w = nn.CrossEntropyLoss()(p_w, target)
+                dldx_w = images.size(0) * grad(loss_w, images_w, create_graph=True)[0].view(-1, dim)
+            loss = cos(dldx_s, dldx_w).mean()
+
+        elif args.method == 'kl-jacobian':
+            dim = images.size(1)*images.size(2)*images.size(3)
+
+            images_s = (images+delta).clone().detach()
+            images_s.requires_grad=True
+
+            p_s = source_model(images_s)
+            yp_s = F.log_softmax(p_s, dim=1)
+            loss_s = nn.CrossEntropyLoss()(p_s, target)
+            dldx_s = images.size(0) * grad(loss_s, images_s, create_graph=True)[0].view(-1, dim)
+
+            images_w = images_s.clone().detach()
+            images_w.requires_grad=True
+
+            with ctx_noparamgrad_and_eval(witness_model):
+                p_w = witness_model(images_w)
+                yp_w = F.log_softmax(p_w, dim=1)
+                loss_w = nn.CrossEntropyLoss()(p_w, target)
+                dldx_w = images.size(0) * grad(loss_w, images_w, create_graph=True)[0].view(-1, dim)
+            loss = cos(dldx_s, dldx_w).mean()
+            loss += kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s)
+
+
+        loss *= -1 if args.misalign else 1
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
