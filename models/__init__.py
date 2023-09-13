@@ -11,3 +11,5 @@ from .wide_resnet import *
 from .resnext import *
 from .densenet import *
 from .resnet import *
+
+from .embedding import *
