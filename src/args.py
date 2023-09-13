@@ -207,10 +207,12 @@ def get_args():
     return argparse.Namespace(**default)
 
 def print_args(args):
-    print("***************")
-    print("** Arguments **")
-    print("***************")
+    print("***********************************************************")
+    print("************************ Arguments ************************")
+    print("***********************************************************")
     optkeys = list(args.__dict__.keys())
     optkeys.sort()
     for key in optkeys:
         print("{}: {}".format(key, args.__dict__[key]))
+    print("***********************************************************")
+    print("***********************************************************")

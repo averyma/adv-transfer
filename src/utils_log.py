@@ -91,7 +91,6 @@ class metaLogger(object):
         self.log_dict = self.load_log(self.log_path)
 
     def get_ckpt_status(self, j_dir, j_id):
-        print('getting ckpt status')
         ckpt_dir = j_dir+"/"+str(j_id)+"/"
         ckpt_location_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
         ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
@@ -100,7 +99,7 @@ class metaLogger(object):
             return 'none' # this results in an invalid ckpt_location
 
         try:
-            print('loading ckpt_curr')
+            print('[metaLogger]: getting ckpt_curr status')
             torch.load(ckpt_location_curr)
         except:
             print('failed to load ckpt_curr')
@@ -108,7 +107,7 @@ class metaLogger(object):
             return "curr"
 
         try:
-            print('loading prev_curr')
+            print('[metaLogger]: getting ckpt_prev status')
             torch.load(ckpt_location_prev)
         except:
             print('failed to load ckpt_prev')
