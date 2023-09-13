@@ -65,6 +65,7 @@ def main():
         mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args), start_method='spawn', join=True)
     else:
         # Simply call main_worker function
+        args.gpu = None
         main_worker(args.gpu, ngpus_per_node, args)
 
 def main_worker(gpu, ngpus_per_node, args):
@@ -200,7 +201,9 @@ def main_worker(gpu, ngpus_per_node, args):
                 print('No ckpt found at {}'.format(args.resume_from_ckpt))
         else:
             print('Ckpt already exists at {}. No Resuming.'.format(ckpt_dir))
-    dist.barrier()
+
+    if args.distributed:
+        dist.barrier()
 
     valid_checkpoint = False
     for ckpt_location in [ckpt_location_prev, ckpt_location_curr]:
@@ -221,7 +224,9 @@ def main_worker(gpu, ngpus_per_node, args):
                     load_ckpt_successful = True
                     valid_checkpoint = True
                     load_this_ckpt = ckpt_location
-    dist.barrier()
+
+    if args.distributed:
+        dist.barrier()
 
     if valid_checkpoint and os.path.exists(load_this_ckpt):
         loc = 'cuda:{}'.format(args.gpu)
@@ -240,7 +245,9 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.cuda.empty_cache()
     else:
         print('NO CHECKPOINT LOADED, FRESH START!')
-    dist.barrier()
+
+    if args.distributed:
+        dist.barrier()
 
     actual_trained_epoch = args.epoch
 
@@ -276,24 +283,20 @@ def main_worker(gpu, ngpus_per_node, args):
 ##########################################################
 ###################### Training begins ###################
 ##########################################################
-    dist.barrier()
+    if args.distributed:
+        dist.barrier()
     for _epoch in range(ckpt_epoch, args.epoch+1):
         if args.distributed:
             train_sampler.set_epoch(_epoch)
 
         # train for one epoch
-        if args.optimize_cluster_param:
-            test_acc1, test_acc5 = 99, 99
-            # train_acc1, train_acc5, loss = 99, 99, 0
+        if args.distributed:
             dist.barrier()
-            print('about to start training')
-            train_acc1, train_acc5, loss = train(train_loader, model, criterion, opt, _epoch, device, args, is_main_task, scaler, mixup_cutmix)
+        train_acc1, train_acc5, loss = train(train_loader, model, criterion, opt, _epoch, device, args, is_main_task, scaler, mixup_cutmix)
+        if args.distributed:
             dist.barrier()
-        else:
-            dist.barrier()
-            train_acc1, train_acc5, loss = train(train_loader, model, criterion, opt, _epoch, device, args, is_main_task, scaler, mixup_cutmix)
-            dist.barrier()
-            test_acc1, test_acc5 = validate(test_loader, model, criterion, args, is_main_task, False)
+        test_acc1, test_acc5 = validate(test_loader, model, criterion, args, is_main_task, False)
+        if args.distributed:
             dist.barrier()
         lr_scheduler.step()
 
@@ -349,7 +352,8 @@ def main_worker(gpu, ngpus_per_node, args):
             actual_trained_epoch = _epoch
             saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
             break # break the training for-loop
-    dist.barrier()
+    if args.distributed:
+        dist.barrier()
 ##########################################################
 ###################### Training ends #####################
 ##########################################################
@@ -364,51 +368,6 @@ def main_worker(gpu, ngpus_per_node, args):
     # else:
         # model.load_state_dict(ckpt_best_model)
         # print("LOADED THE BEST CHECKPOINT")
-
-    # Evaluation on imagenet-a, imagenet-o, imagenet-r
-    # _, imagenet_a_loader, _, _ = load_dataset('imagenet-a', args.batch_size, args.workers, args.distributed)
-    # imagenet_a_acc1, imagenet_a_acc5 = validate(imagenet_a_loader, model, criterion, args)
-    # _, imagenet_o_loader, _, _ = load_dataset('imagenet-o', args.batch_size, args.workers, args.distributed)
-    # imagenet_o_acc1, imagenet_o_acc5 = validate(imagenet_o_loader, model, criterion, args)
-    # _, imagenet_r_loader, _, _ = load_dataset('imagenet-r', args.batch_size, args.workers, args.distributed)
-    # imagenet_r_acc1, imagenet_r_acc5 = validate(imagenet_r_loader, model, criterion, args)
-    
-    # if is_main_task:
-        # logger.add_scalar("imagenet-a/top1_acc", imagenet_a_acc1, args.epoch)
-        # logger.add_scalar("imagenet-a/top5_acc", imagenet_a_acc5, args.epoch)
-        # logger.add_scalar("imagenet-o/top1_acc", imagenet_o_acc1, args.epoch)
-        # logger.add_scalar("imagenet-o/top5_acc", imagenet_o_acc5, args.epoch)
-        # logger.add_scalar("imagenet-r/top1_acc", imagenet_r_acc1, args.epoch)
-        # logger.add_scalar("imagenet-r/top5_acc", imagenet_r_acc5, args.epoch)
-
-    # Evaluation on imagenet-c
-    # for _severity in [1, 3, 5]:
-        # corruption_acc1 = []
-        # corruption_acc5 = []
-        # for corruption in CORRUPTIONS_IMAGENET_C:
-            # try:
-                # imagenet_c_loader = load_IMAGENET_C(args.batch_size,
-                                                # corruption,
-                                                # _severity,
-                                                # args.workers,
-                                                # args.distributed)
-            # except:
-                # print("failed to load {}({})".format(corruption, _severity))
-            # else:
-                # print("{}({}) loaded".format(corruption, _severity))
-                # imagenet_c_acc1, imagenet_c_acc5 = validate(imagenet_c_loader, model, criterion, args)
-                # corruption_acc1.append(imagenet_c_acc1)
-                # corruption_acc5.append(imagenet_c_acc5)
-                # if is_main_task:
-                    # logger.add_scalar('imagenet-c/{}-{}/top1_acc'.format(corruption, _severity),
-                            # imagenet_c_acc1, args.epoch)
-                    # logger.add_scalar('imagenet-c/{}-{}/top5_acc'.format(corruption, _severity),
-                            # imagenet_c_acc5, args.epoch)
-        # if is_main_task:
-            # logger.add_scalar('imagenet-c/mCC-{}/top1_acc'.format(_severity),
-                    # np.array(corruption_acc1).mean(), args.epoch)
-            # logger.add_scalar('imagenet-c/mCC-{}/top5_acc'.format(_severity),
-                    # np.array(corruption_acc5).mean(), args.epoch)
 
     # upload runs to wandb:
     if is_main_task:
@@ -439,7 +398,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # delete slurm checkpoints
     delCheckpoint(args.j_dir, args.j_id)
-    ddp_cleanup()
+    if args.distributed:
+        ddp_cleanup()
 
 if __name__ == "__main__":
     main()
