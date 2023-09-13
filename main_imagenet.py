@@ -65,15 +65,14 @@ def main():
         mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args), start_method='spawn', join=True)
     else:
         # Simply call main_worker function
-        args.gpu = None
+        args.gpu = 0 if torch.cuda.is_available() else None
         main_worker(args.gpu, ngpus_per_node, args)
 
 def main_worker(gpu, ngpus_per_node, args):
-    
 
     global best_acc1
-    args.gpu = gpu
     args.ngpus_per_node = ngpus_per_node
+    args.gpu = gpu
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
@@ -91,7 +90,9 @@ def main_worker(gpu, ngpus_per_node, args):
     model = get_model(args)
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():
-        print('using CPU, this will be slow')
+        # print('using CPU, this will be slow')
+        print('This should not be run on CPU!!!!!')
+        return 0
     elif args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
@@ -121,31 +122,25 @@ def main_worker(gpu, ngpus_per_node, args):
         model = model.to(device)
     else:
         # DataParallel will divide and allocate batch_size to all available GPUs
-        if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
-            model.features = torch.nn.DataParallel(model.features)
-            model.cuda()
-        else:
-            model = torch.nn.DataParallel(model).cuda()
+        model = torch.nn.DataParallel(model).cuda()
 
     if torch.cuda.is_available():
-        if args.gpu:
-            device = torch.device('cuda:{}'.format(args.gpu))
-        else:
-            device = torch.device("cuda")
+        device = torch.device('cuda:{}'.format(args.gpu))
     elif torch.backends.mps.is_available():
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
 
-    print('device: {}'.format(device))
-
     is_main_task = not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)
+
+    print('{}: is_main_task: {}'.format(device, is_main_task))
 
     criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing).to(device)
 
     opt, lr_scheduler = get_optim(model, args)
     scaler = torch.cuda.amp.GradScaler() if args.amp else None
-    print('agrs.amp: {}, scaler: {}'.format(args.amp, scaler))
+    if is_main_task:
+        print('{}: agrs.amp: {}, scaler: {}'.format(device, args.amp, scaler))
     ckpt_epoch = 1
 
     ckpt_dir = args.j_dir+"/"+str(args.j_id)+"/"
@@ -212,15 +207,14 @@ def main_worker(gpu, ngpus_per_node, args):
             load_ckpt_successful = False
             while not load_ckpt_successful and load_ckpt_retry < 5:
                 load_ckpt_retry += 1
-                print("Checkpoint found at {}\n"
-                      "Loading ckpt to device {}\n"
-                      "Attempt: {}".format(ckpt_location, device, load_ckpt_retry))
+                print("{}: Checkpoint found at {}".format(device, ckpt_location))
+                print("{}: Loading ckpt. Attempt: {}".format(device, load_ckpt_retry))
                 try:
                     torch.load(ckpt_location)
                 except:
-                    print("Corrupted ckpt at {}".format(ckpt_location_curr))
+                    print("{}: Corrupted ckpt!".format(device))
                 else:
-                    print("Checkpoint verified at {}".format(ckpt_location))
+                    print("{}: Checkpoint verified!".format(device))
                     load_ckpt_successful = True
                     valid_checkpoint = True
                     load_this_ckpt = ckpt_location
@@ -231,20 +225,24 @@ def main_worker(gpu, ngpus_per_node, args):
     if valid_checkpoint and os.path.exists(load_this_ckpt):
         loc = 'cuda:{}'.format(args.gpu)
         ckpt = torch.load(load_this_ckpt, map_location=loc)
-        model.load_state_dict(ckpt["state_dict"])
-        opt.load_state_dict(ckpt["optimizer"])
-        ckpt_epoch = ckpt["epoch"]
-        best_acc1 = ckpt['best_acc1']
-        if lr_scheduler is not None:
-            for _dummy in range(ckpt_epoch-1):
-                lr_scheduler.step()
-        if scaler is not None:
-            scaler.load_state_dict(ckpt["scaler"])
-        print("CHECKPOINT LOADED to device: {}".format(device))
-        del ckpt
-        torch.cuda.empty_cache()
+        try:
+            model.load_state_dict(ckpt["state_dict"])
+            opt.load_state_dict(ckpt["optimizer"])
+            ckpt_epoch = ckpt["epoch"]
+            best_acc1 = ckpt['best_acc1']
+            if lr_scheduler is not None:
+                for _dummy in range(ckpt_epoch-1):
+                    lr_scheduler.step()
+            if scaler is not None:
+                scaler.load_state_dict(ckpt["scaler"])
+            print("{}: CHECKPOINT LOADED!".format(device))
+            del ckpt
+            torch.cuda.empty_cache()
+        except KeyError:
+            print("{}: Key Error in loading ckpt!".format(device))
+            return 0
     else:
-        print('NO CHECKPOINT LOADED, FRESH START!')
+        print('{}: NO CHECKPOINT LOADED, FRESH START!'.format(device))
 
     if args.distributed:
         dist.barrier()
@@ -252,10 +250,12 @@ def main_worker(gpu, ngpus_per_node, args):
     actual_trained_epoch = args.epoch
 
     if is_main_task:
-        print('This is the device: {} for the main task!'.format(device))
+        print('{}: This is the device for the main task!'.format(device))
         # was hanging on wandb init on wandb 0.12.9, fixed after upgrading to 0.15.7
         if args.enable_wandb:
+            print('{}: wandb logger created!'.format(device))
             wandb_logger = wandbLogger(args)
+        print('{}: local logger created!'.format(device))
         logger = metaLogger(args)
         logging.basicConfig(
             filename=args.j_dir+ "/log/log.txt",
@@ -279,7 +279,8 @@ def main_worker(gpu, ngpus_per_node, args):
             num_categories=num_classes,
             use_v2=args.use_v2
             )
-    print('finished data loader')
+
+    print('{}: Dataloader compelete! Ready for training!'.format(device))
 ##########################################################
 ###################### Training begins ###################
 ##########################################################
@@ -334,7 +335,7 @@ def main_worker(gpu, ngpus_per_node, args):
                         "state_dict": model.state_dict(),
                         "optimizer": opt.state_dict(),
                         "epoch": _epoch+1,
-                        "best_acc1":best_acc1
+                        "best_acc1": best_acc1
                         }
                 if scaler is not None:
                     ckpt["scaler"] = scaler.state_dict()
@@ -348,7 +349,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # Early terminate training when half way thru training and test accuracy still below 20%
         if np.isnan(loss) or (_epoch > int(args.epoch/2) and test_acc1 < 20):
-            print('Early stopping at epoch {}.'.format(_epoch))
+            print('{}: Early stopping at epoch {}.'.format(device, _epoch))
             actual_trained_epoch = _epoch
             saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
             break # break the training for-loop
