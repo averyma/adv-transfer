@@ -146,8 +146,8 @@ def parse_args():
                         default=False, type=distutils.util.strtobool)
     parser.add_argument("--misalign",
                         default=False, type=distutils.util.strtobool)
-    parser.add_argument("--ce_regularized",
-                        default=False, type=distutils.util.strtobool)
+    # parser.add_argument("--ce_regularized",
+                        # default=False, type=distutils.util.strtobool)
     # the following pgd params are used in whitebox and transfer evaluations
     # if alignment is performed at pgd perturbed datapoint, the same pgd_eps, pgd_alpha
     # will be used, the number of iteration is specified in ${noise_type}
@@ -162,9 +162,22 @@ def parse_args():
                             default=1., type=float)
     parser.add_argument("--rkd_angle_ratio",
                             default=2., type=float)
-
-
-
+    parser.add_argument("--ega_node_weight",
+                            default=0.8, type=float)
+    parser.add_argument("--ega_edge_weight",
+                            default=0.24, type=float)
+    parser.add_argument("--hint_weight",
+                            default=1., type=float)
+    parser.add_argument("--nce_temp",
+                            default=0.1, type=float)
+    parser.add_argument("--kl_temp",
+                            default=4., type=float)
+    parser.add_argument("--no_proj_when_dim_matches",
+                        default=False, type=distutils.util.strtobool)
+    parser.add_argument("--lambda_cls",
+                            default=0., type=float)
+    parser.add_argument("--lambda_kd",
+                            default=1., type=float)
 
 
     args = parser.parse_args()
@@ -200,9 +213,9 @@ def get_args():
     
     make_dir(default)
 
-    if args.dataset.startswith('cifar'):
-        args_dict = DictWrapper(default)
-        return args_dict
+    # if args.dataset.startswith('cifar'):
+        # args_dict = DictWrapper(default)
+        # return args_dict
 
     return argparse.Namespace(**default)
 
