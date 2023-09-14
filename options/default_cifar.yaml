@@ -37,3 +37,4 @@ eval_CC: True
 op_name: 'Identity'
 op_prob: 1.
 op_magnitude: 1
+print_freq: 100
