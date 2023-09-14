@@ -392,6 +392,11 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
     criterion_cls = criterion_list[0]
     criterion_kd = criterion_list[1]
 
+    len_history = len(train_loader) if not args.debug else 3
+    loss_history = np.empty(len_history)
+    loss_cls_history = np.empty(len_history)
+    loss_kd_history = np.empty(len_history)
+
     # switch to train mode
     source_model.train()
     witness_model.eval()
@@ -459,9 +464,10 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
                 if args.source_arch.startswith('preactresnet'):
                     source_model_hook.avgpool.register_forward_hook(get_features('feat_s'))
                 elif args.source_arch.startswith('vgg'):
-                    source_model_hook.module.features.register_forward_hook(get_features('feat_s'))
+                    source_model_hook.features.register_forward_hook(get_features('feat_s'))
                 elif args.source_arch.startswith('vit'):
                     source_model_hook.to_latent.register_forward_hook(get_features('feat_s'))
+
                 if args.witness_arch.startswith('preactresnet'):
                     witness_model_hook.avgpool.register_forward_hook(get_features('feat_w'))
                 elif args.witness_arch.startswith('vgg'):
@@ -503,13 +509,17 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
 
+        loss_history[i] = loss.item()
+        loss_cls_history[i] = loss_cls.item()
+        loss_kd_history[i] = loss_kd.item()
+
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
 
         if i % args.print_freq == 0 and is_main_task:
             progress.display(i + 1)
-        if args.debug:
+        if args.debug and i == 2:
             break
 
-    return top1.avg, top5.avg, losses.avg
+    return top1.avg, top5.avg, losses.avg, [loss_history, loss_cls_history, loss_kd_history]

@@ -178,6 +178,9 @@ def main_worker(gpu, ngpus_per_node, args):
     print('{}: Use linear projection: {}'.format(device, args.project_source_embedding))
 
     result = {
+            'loss': None,
+            'loss_cls': None,
+            'loss_kd': None,
             'pre/test-err': None,
             'post/test-err': None,
             'diff/test-err': None,
@@ -395,7 +398,7 @@ def main_worker(gpu, ngpus_per_node, args):
         # for _epoch in range(ckpt_epoch, args.epoch+1):
         if args.distributed:
             train_sampler.set_epoch(_epoch)
-        train_acc1, train_acc5, loss = model_align_feature_space(train_loader,
+        train_acc1, train_acc5, loss, loss_history = model_align_feature_space(train_loader,
                                                                 module_list,
                                                                 criterion_list,
                                                                 opt,
@@ -403,17 +406,20 @@ def main_worker(gpu, ngpus_per_node, args):
                                                                 args,
                                                                 is_main_task)
         del train_loader
-    if args.distributed:
-        dist.barrier()
+    # if args.distributed:
+        # dist.barrier()
 ##########################################################
 ###################### Training ends #####################
 ##########################################################
 
-    # checkpointing for preemption
-    if is_main_task:
-        ckpt = { "state_dict": source_model.state_dict(), 'result': result}
-        rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
-        logger.save_log()
+        # checkpointing for preemption
+        if is_main_task:
+            result['loss'] = loss_history[0]
+            result['loss_cls'] = loss_history[1]
+            result['loss_kd'] = loss_history[2]
+            ckpt = { "state_dict": source_model.state_dict(), 'result': result}
+            rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
+            logger.save_log()
     if args.distributed:
         dist.barrier()
     
@@ -514,8 +520,13 @@ def main_worker(gpu, ngpus_per_node, args):
                 result[_prefix+_metric] = _result
 
         for key in result.keys():
-            logger.add_scalar(key, result[key], _epoch)
-            logging.info("{}: {:.2f}\t".format(key, result[key]))
+            if 'loss' not in key:
+                logger.add_scalar(key, result[key], _epoch)
+                logging.info("{}: {:.2f}\t".format(key, result[key]))
+            else:
+                actual_trained_epoch = len(result['loss'])
+                for i in range(actual_trained_epoch):
+                    logger.add_scalar(key, result[key][i], i+1)
 
     if args.distributed:
         dist.barrier()
