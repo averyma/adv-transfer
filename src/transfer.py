@@ -10,6 +10,8 @@ import numpy as np
 from src.utils_log import Summary, AverageMeter, ProgressMeter
 from src.evaluation import accuracy
 import time
+# from src.rkd import RkdDistance, RKdAngle
+from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss
 
 def rand_init(dataset, x, epsilon = 8./255.):
         # imagenet normalization
@@ -270,8 +272,8 @@ def model_align(train_loader, source_model, witness_model, optimizer, device, ar
 
     if args.noise_type != 'none':
         param = {'ord': np.inf,
-                 'epsilon': 4./255.,
-                 'alpha': 1./255.,
+                 'epsilon': args.pgd_eps,
+                 'alpha': args.pgd_alpha,
                  'num_iter': 10,
                  'restarts': 1,
                  'rand_init': True,
@@ -351,6 +353,136 @@ def model_align(train_loader, source_model, witness_model, optimizer, device, ar
             loss = cos(dldx_s, dldx_w).mean()
             loss += kl_loss(yp_s, yp_w) + kl_loss(yp_w, yp_s)
 
+        loss *= -1 if args.misalign else 1
+        # compute gradient and do SGD step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # measure accuracy and record loss
+        acc1, acc5 = accuracy(p_s, target, topk=(1, 5))
+        losses.update(loss.item(), images.size(0))
+        top1.update(acc1[0], images.size(0))
+        top5.update(acc5[0], images.size(0))
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % args.print_freq == 0 and is_main_task:
+            progress.display(i + 1)
+        if args.debug:
+            break
+
+    return top1.avg, top5.avg, losses.avg
+
+def model_align_feature_space(train_loader, module_list, criterion_list, optimizer, device, args, is_main_task):
+    batch_time = AverageMeter('Time', ':6.3f')
+    data_time = AverageMeter('Data', ':6.3f')
+    losses = AverageMeter('Loss', ':.4e')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    progress = ProgressMeter(
+        len(train_loader),
+        [batch_time, data_time, losses, top1, top5],
+        prefix="Align Epoch: [{}]".format(0))
+
+    source_model = module_list[0]
+    witness_model = module_list[1]
+    criterion_cls = criterion_list[0]
+    criterion_kd = criterion_list[1]
+
+    # switch to train mode
+    source_model.train()
+    witness_model.eval()
+
+    if args.project_source_embedding:
+        source_projection = module_list[2]
+        source_projection.train()
+
+    for param in witness_model.parameters():
+        param.requires_grad = False
+
+    if args.noise_type != 'none':
+        param = {'ord': np.inf,
+                 'epsilon': args.pgd_eps,
+                 'alpha': args.pgd_alpha,
+                 'num_iter': 10,
+                 'restarts': 1,
+                 'rand_init': True,
+                 'clip': True,
+                 'loss_fn': nn.CrossEntropyLoss(),
+                 'dataset': args.dataset}
+        if args.noise_type == 'rand_init':
+            param['num_iter'] = 0
+        elif args.noise_type.startswith('pgd'):
+            _itr = args.noise_type[3:-6] if args.noise_type.endswith('indep') else args.noise_type[3::]
+            param['num_iter'] = int(_itr)
+        attacker = pgd(**param)
+
+    end = time.time()
+    for i, (images, target) in enumerate(train_loader):
+        # measure data loading time
+        data_time.update(time.time() - end)
+
+        # move data to the same device as model
+        images = images.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+
+        if args.noise_type != 'none':
+            with ctx_noparamgrad_and_eval(source_model):
+                delta = attacker.generate(source_model, images, target)
+        else:
+            delta = 0
+
+        if args.method != 'kl':
+            features={}
+            def get_features(name):
+                def hook(model, input, output):
+                    features[name] = output
+                return hook
+
+            source_model_hook = source_model.module if args.distributed else source_model
+            witness_model_hook = witness_model.module if args.distributed else witness_model
+
+            if args.dataset == 'imagenet':
+                source_model_hook.avgpool.register_forward_hook(get_features('feat_s'))
+                witness_model_hook.avgpool.register_forward_hook(get_features('feat_w'))
+            elif args.dataset.startswith('cifar'):
+                if args.source_arch.startswith('preactresnet'):
+                    source_model_hook.avgpool.register_forward_hook(get_features('feat_s'))
+                elif args.source_arch.startswith('vgg'):
+                    source_model_hook.module.features.register_forward_hook(get_features('feat_s'))
+                elif args.source_arch.startswith('vit'):
+                    source_model_hook.to_latent.register_forward_hook(get_features('feat_s'))
+                if args.witness_arch.startswith('preactresnet'):
+                    witness_model_hook.avgpool.register_forward_hook(get_features('feat_w'))
+                elif args.witness_arch.startswith('vgg'):
+                    witness_model_hook.features.register_forward_hook(get_features('feat_w'))
+                elif args.witness_arch.startswith('vit'):
+                    witness_model_hook.to_latent.register_forward_hook(get_features('feat_w'))
+
+        p_s = source_model(images+delta)
+        with ctx_noparamgrad_and_eval(witness_model):
+            p_w = witness_model(images+delta)
+
+        if args.method != 'kl':
+            feat_s = features['feat_s'].view(images.size(0), -1)
+            feat_w = features['feat_w'].view(images.size(0), -1)
+
+            if args.project_source_embedding:
+                feat_s = source_projection(feat_s)
+        else:
+            feat_s = p_s
+            feat_w = p_w
+
+        if args.method == 'nce':
+            loss_kd = criterion_kd(feat_s, feat_w, target)
+        else:
+            loss_kd = criterion_kd(feat_s, feat_w)
+
+        loss_cls = criterion_cls(p_s, target)
+        loss = args.lambda_kd * loss_kd + args.lambda_cls * loss_cls
 
         loss *= -1 if args.misalign else 1
         # compute gradient and do SGD step
