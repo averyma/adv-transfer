@@ -654,16 +654,132 @@ def eval_transfer_bi_direction(val_loader, model_a, model_b, args, is_main_task)
         top5_b2a.all_reduce()
         top5_a2b.all_reduce()
 
-    # if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
-        # aux_val_dataset = Subset(val_loader.dataset,
-                                 # range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
-        # aux_val_loader = torch.utils.data.DataLoader(
-            # aux_val_dataset, batch_size=args.batch_size, shuffle=False,
-            # num_workers=args.workers, pin_memory=True)
-        # run_validate(aux_val_loader, len(val_loader))
-
     if is_main_task:
         progress.display_summary()
 
     return top1_a2b.avg, top1_b2a.avg
+
+def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is_main_task):
+    param = {'ord': np.inf,
+             'epsilon': args.pgd_eps,
+             'alpha': args.pgd_alpha,
+             'num_iter': args.pgd_itr,
+             'restarts': 1,
+             'rand_init': True,
+             'clip': True,
+             'loss_fn': nn.CrossEntropyLoss(),
+             'dataset': args.dataset}
+    param['num_iter'] = 1 if args.debug else args.pgd_itr
+    attacker = pgd(**param)
+    if args.dataset == 'imagenet':
+        num_eval = 100 if args.debug else 1000
+        # NS: no selection
+        num_eval_NS = 100 if args.debug else 1000
+    else:
+        num_eval = 100 if args.debug else 10000
+        # NS: no selection
+        num_eval_NS = 100 if args.debug else 10000
+
+    def run_validate_one_epoch(images, target, update_qualified):
+        end = time.time()
+        if args.gpu is not None and torch.cuda.is_available():
+            images = images.cuda(args.gpu, non_blocking=True)
+        if torch.backends.mps.is_available():
+            images = images.to('mps')
+            target = target.to('mps')
+        if torch.cuda.is_available():
+            target = target.cuda(args.gpu, non_blocking=True)
+
+        with ctx_noparamgrad_and_eval(model_a):
+            delta_a = attacker.generate(model_a, images, target)
+
+        with ctx_noparamgrad_and_eval(model_b):
+            delta_b = attacker.generate(model_b, images, target)
+
+        # compute output
+        with torch.no_grad():
+            p_a = model_a(images)
+            p_b = model_b(images)
+            p_adv_a = model_a(images+delta_a)
+            p_adv_b = model_b(images+delta_b)
+            qualified = return_qualified(p_a, p_b, p_adv_a, p_adv_b, target)
+
+            p_b2a_NS = model_a((images+delta_b))
+            p_a2b_NS = model_b((images+delta_a))
+
+            p_b2a = p_b2a_NS[qualified, ::]
+            p_a2b = p_a2b_NS[qualified, ::]
+
+        # measure accuracy and record loss
+        num_qualified = qualified.sum().item()
+        acc1_b2a, acc5_b2a = accuracy(p_b2a, target[qualified], topk=(1, 5))
+        acc1_a2b, acc5_a2b = accuracy(p_a2b, target[qualified], topk=(1, 5))
+        if update_qualified:
+            top1_b2a.update(acc1_b2a[0], num_qualified)
+            top5_b2a.update(acc5_b2a[0], num_qualified)
+            top1_a2b.update(acc1_a2b[0], num_qualified)
+            top5_a2b.update(acc5_a2b[0], num_qualified)
+            total_qualified.update(num_qualified)
+
+        acc1_b2a_NS, acc5_b2a_NS = accuracy(p_b2a_NS, target, topk=(1, 5))
+        acc1_a2b_NS, acc5_a2b_NS = accuracy(p_a2b_NS, target, topk=(1, 5))
+        top1_b2a_NS.update(acc1_b2a_NS[0], images.size(0))
+        top5_b2a_NS.update(acc5_b2a_NS[0], images.size(0))
+        top1_a2b_NS.update(acc1_a2b_NS[0], images.size(0))
+        top5_a2b_NS.update(acc5_a2b_NS[0], images.size(0))
+        total_eval.update(images.size(0))
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
+    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top1_a2b = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    top5_a2b = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    top1_b2a_NS = AverageMeter('Acc@1(NS)', ':6.2f', Summary.AVERAGE)
+    top1_a2b_NS = AverageMeter('Acc@1(NS)', ':6.2f', Summary.AVERAGE)
+    top5_b2a_NS = AverageMeter('Acc@5(NS)', ':6.2f', Summary.AVERAGE)
+    top5_a2b_NS = AverageMeter('Acc@5(NS)', ':6.2f', Summary.AVERAGE)
+    total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
+    total_eval = AverageMeter('Evaluated(NS)', ':6.2f', Summary.SUM)
+    progress = ProgressMeter(
+        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        [batch_time, top1_a2b, top1_a2b_NS, top1_b2a, top1_b2a_NS, total_qualified, total_eval],
+        prefix='Transfer: ')
+
+    # switch to evaluate mode
+    model_a.eval()
+    model_b.eval()
+
+    update_qualified=True
+    for i, (images, target) in enumerate(val_loader):
+        run_validate_one_epoch(images, target, update_qualified)
+
+        if is_main_task:
+            progress.display(i + 1)
+
+        if args.distributed:
+            total_qualified.all_reduce()
+
+        if total_qualified.sum > (num_eval/args.ngpus_per_node):
+            update_qualified = False
+        if total_eval.sum > (num_eval_NS/args.ngpus_per_node):
+            break
+
+    if args.distributed:
+        top1_b2a.all_reduce()
+        top1_a2b.all_reduce()
+        top5_b2a.all_reduce()
+        top5_a2b.all_reduce()
+        top1_b2a_NS.all_reduce()
+        top1_a2b_NS.all_reduce()
+        top5_b2a_NS.all_reduce()
+        top5_a2b_NS.all_reduce()
+
+    if is_main_task:
+        progress.display_summary()
+
+    return top1_a2b.avg, top1_b2a.avg, top1_a2b_NS.avg, top1_b2a_NS.avg
 
