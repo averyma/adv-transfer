@@ -580,7 +580,7 @@ def eval_transfer_bi_direction(val_loader, model_a, model_b, args, is_main_task)
     attacker = pgd(**param)
     num_eval = 100 if args.debug else 1000
 
-    def run_validate_one_epoch(images, target, base_progress=0):
+    def run_validate_one_iteration(images, target, base_progress=0):
         end = time.time()
         if args.gpu is not None and torch.cuda.is_available():
             images = images.cuda(args.gpu, non_blocking=True)
@@ -637,7 +637,7 @@ def eval_transfer_bi_direction(val_loader, model_a, model_b, args, is_main_task)
     model_b.eval()
 
     for i, (images, target) in enumerate(val_loader):
-        run_validate_one_epoch(images, target)
+        run_validate_one_iteration(images, target)
 
         if is_main_task:
             progress.display(i + 1)
@@ -680,7 +680,7 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
         # NS: no selection
         num_eval_NS = 100 if args.debug else 10000
 
-    def run_validate_one_epoch(images, target, update_qualified):
+    def run_validate_one_iteration(images, target, update_qualified):
         end = time.time()
         if args.gpu is not None and torch.cuda.is_available():
             images = images.cuda(args.gpu, non_blocking=True)
@@ -755,7 +755,7 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
 
     update_qualified=True
     for i, (images, target) in enumerate(val_loader):
-        run_validate_one_epoch(images, target, update_qualified)
+        run_validate_one_iteration(images, target, update_qualified)
 
         if is_main_task:
             progress.display(i + 1)
