@@ -152,7 +152,7 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.source_arch != args.witness_arch:
             args.project_source_embedding = True
         else:
-            args.project_source_embedding = args.no_proj_when_dim_matches
+            args.project_source_embedding = args.always_proj
     else:
         args.project_source_embedding = False
 

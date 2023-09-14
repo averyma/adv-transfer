@@ -172,8 +172,8 @@ def parse_args():
                             default=0.1, type=float)
     parser.add_argument("--kl_temp",
                             default=4., type=float)
-    parser.add_argument("--no_proj_when_dim_matches",
-                        default=False, type=distutils.util.strtobool)
+    parser.add_argument("--always_proj",
+                        default=True, type=distutils.util.strtobool)
     parser.add_argument("--lambda_cls",
                             default=0., type=float)
     parser.add_argument("--lambda_kd",
