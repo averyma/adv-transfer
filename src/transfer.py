@@ -442,8 +442,15 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
                     features[name] = output
                 return hook
 
-            source_model_hook = source_model.module if args.distributed else source_model
-            witness_model_hook = witness_model.module if args.distributed else witness_model
+            try:
+                source_model_hook = source_model.module
+            except:
+                source_model_hook = source_model
+
+            try:
+                witness_model_hook = witness_model.module
+            except:
+                witness_model_hook = witness_model
 
             if args.dataset == 'imagenet':
                 source_model_hook.avgpool.register_forward_hook(get_features('feat_s'))
