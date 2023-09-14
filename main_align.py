@@ -28,7 +28,7 @@ from src.attacks import pgd
 from src.context import ctx_noparamgrad_and_eval
 import torch.nn.functional as F
 import ipdb
-from src.evaluation import validate, eval_transfer, eval_transfer_bi_direction
+from src.evaluation import validate, eval_transfer, eval_transfer_bi_direction, eval_transfer_bi_direction_two_metric
 from src.transfer import model_align, model_align_feature_space
 from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss
 
@@ -214,6 +214,12 @@ def main_worker(gpu, ngpus_per_node, args):
             for _to_from in ['to', 'from']:
                 result[_metric+'/transfer-'+_to_from+'-'+_arch] = None
 
+    result_temp = copy.deepcopy(result)
+    for key in result_temp.keys():
+        if 'transfer' in key:
+            result['NS/'+key] = None
+    del result_temp
+
     if not torch.cuda.is_available():
         # print('using CPU, this will be slow')
         print('This should not be run on CPU!!!!!')
@@ -373,7 +379,10 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         test_loader_1k = test_loader
         test_loader_shuffle = test_loader
-
+    print('{}: len(test_loader): {}\t len(test_loader_1k): {}\t len(test_loader_shuffle): {}'.format(device,
+                                                                                                len(test_loader)*args.batch_size,
+                                                                                                len(test_loader_1k)*args.batch_size,
+                                                                                                len(test_loader_shuffle)*args.batch_size))
     print('{}: Dataloader compelete! Ready for alignment!'.format(device))
     if is_main_task:
         print('Modifying {} with {} using {}!'.format(args.source_arch, args.witness_arch, args.method))
@@ -394,7 +403,6 @@ def main_worker(gpu, ngpus_per_node, args):
                                                                 args,
                                                                 is_main_task)
         del train_loader
-        return 0
     if args.distributed:
         dist.barrier()
 ##########################################################
@@ -455,8 +463,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
                 if args.distributed:
                     dist.barrier()
-                    val_sampler.set_epoch(27)
-                test_acc1_target2source, test_acc1_source2target = eval_transfer_bi_direction(
+                    if args.dataset == 'imagenet':
+                        val_sampler.set_epoch(27)
+                test_acc1_target2source, test_acc1_source2target, test_acc1_target2source_NS, test_acc1_source2target_NS = eval_transfer_bi_direction_two_metric(
                                                                     test_loader_shuffle,
                                                                     model_a=target_model,
                                                                     model_b=source_model,
@@ -464,6 +473,8 @@ def main_worker(gpu, ngpus_per_node, args):
                                                                     is_main_task=is_main_task)
                 _result_target2source = 100.-test_acc1_target2source
                 _result_source2target = 100.-test_acc1_source2target
+                _result_target2source_NS = 100.-test_acc1_target2source_NS
+                _result_source2target_NS = 100.-test_acc1_source2target_NS
                 if args.distributed:
                     dist.barrier()
                 if is_main_task:
@@ -471,6 +482,12 @@ def main_worker(gpu, ngpus_per_node, args):
                     print('{}: {:.2f}'.format(prefix + 'transfer-from-' + target_arch, _result_target2source))
                     result[prefix + 'transfer-to-' + target_arch] = _result_source2target
                     print('{}: {:.2f}'.format(prefix + 'transfer-to-' + target_arch, _result_source2target))
+
+                    result['NS/'+prefix + 'transfer-from-' + target_arch] = _result_target2source_NS
+                    print('{}: {:.2f}'.format('NS/'+prefix + 'transfer-from-' + target_arch, _result_target2source_NS))
+                    result['NS/'+prefix + 'transfer-to-' + target_arch] = _result_source2target_NS
+                    print('{}: {:.2f}'.format('NS/'+prefix + 'transfer-to-' + target_arch, _result_source2target_NS))
+
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result}
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
@@ -484,11 +501,13 @@ def main_worker(gpu, ngpus_per_node, args):
             if _metric in ['transfer-from-', 'transfer-to-']:
                 for _arch in list_target_arch:
                     result['diff/{}{}'.format(_metric, _arch)] = result['post/{}{}'.format(_metric, _arch)] - result['pre/{}{}'.format(_metric, _arch)]
+                    result['NS/diff/{}{}'.format(_metric, _arch)] = result['NS/post/{}{}'.format(_metric, _arch)] - result['NS/pre/{}{}'.format(_metric, _arch)]
             else:
                 result['diff/{}'.format(_metric)] = result['post/{}'.format(_metric)] - result['pre/{}'.format(_metric)]
 
         for _metric in ['avg-transfer-from', 'avg-transfer-to']:
-            for _prefix in ['pre/', 'post/', 'diff/']:
+            # for _prefix in ['pre/', 'post/', 'diff/']:
+            for _prefix in ['pre/', 'post/', 'diff/', 'NS/pre/', 'NS/post/', 'NS/diff/']:
                 _result = 0
                 for _arch in list_target_arch:
                     _result += result[_prefix+_metric[4:]+'-'+_arch]/3.
