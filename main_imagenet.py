@@ -208,8 +208,7 @@ def main_worker(gpu, ngpus_per_node, args):
         dist.barrier()
 
     if valid_checkpoint and os.path.exists(load_this_ckpt):
-        loc = 'cuda:{}'.format(args.gpu)
-        ckpt = torch.load(load_this_ckpt, map_location=loc)
+        ckpt = torch.load(load_this_ckpt, map_location=device)
         try:
             model.load_state_dict(ckpt["state_dict"])
             opt.load_state_dict(ckpt["optimizer"])
@@ -383,7 +382,8 @@ def main_worker(gpu, ngpus_per_node, args):
         logger.save_log(is_final_result=True)
 
     # delete slurm checkpoints
-    delCheckpoint(args.j_dir, args.j_id)
+    if is_main_task:
+        delCheckpoint(args.j_dir, args.j_id)
     if args.distributed:
         ddp_cleanup()
 
