@@ -187,27 +187,9 @@ def main_worker(gpu, ngpus_per_node, args):
             'pre/whitebox-err': None,
             'post/whitebox-err': None,
             'diff/whitebox-err': None,
-            # 'pre/transfer-from-resnet18': None,
-            # 'post/transfer-from-resnet18': None,
-            # 'diff/transfer-from-resnet18': None,
-            # 'pre/transfer-from-resnet50': None,
-            # 'post/transfer-from-resnet50': None,
-            # 'diff/transfer-from-resnet50': None,
-            # 'pre/transfer-from-vgg19_bn': None,
-            # 'post/transfer-from-vgg19_bn': None,
-            # 'diff/transfer-from-vgg19_bn': None,
             'pre/avg-transfer-from': None,
             'post/avg-transfer-from': None,
             'diff/avg-transfer-from': None,
-            # 'pre/transfer-to-resnet18': None,
-            # 'post/transfer-to-resnet18': None,
-            # 'diff/transfer-to-resnet18': None,
-            # 'pre/transfer-to-resnet50': None,
-            # 'post/transfer-to-resnet50': None,
-            # 'diff/transfer-to-resnet50': None,
-            # 'pre/transfer-to-vgg19_bn': None,
-            # 'post/transfer-to-vgg19_bn': None,
-            # 'diff/transfer-to-vgg19_bn': None,
             'pre/avg-transfer-to': None,
             'post/avg-transfer-to': None,
             'diff/avg-transfer-to': None,
@@ -324,20 +306,21 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.distributed:
         dist.barrier()
 
+    ckpt_epoch = 1
+
     if valid_checkpoint and os.path.exists(load_this_ckpt):
         ckpt = torch.load(load_this_ckpt, map_location=device)
         source_model.load_state_dict(ckpt["state_dict"])
         result = ckpt['result']
+        ckpt_epoch = ckpt['ckpt_epoch']
         print("{}: CHECKPOINT LOADED!".format(device))
         del ckpt
         torch.cuda.empty_cache()
     else:
         print('{}: NO CHECKPOINT LOADED, FRESH START!'.format(device))
+
     if args.distributed:
         dist.barrier()
-
-    actual_trained_epoch = 1
-    _epoch = 1
 
     if is_main_task:
         print('{}: This is the device for the main task!'.format(device))
@@ -382,11 +365,19 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         test_loader_1k = test_loader
         test_loader_shuffle = test_loader
-    print('{}: len(test_loader): {}\t len(test_loader_1k): {}\t len(test_loader_shuffle): {}'.format(device,
-                                                                                                len(test_loader)*args.batch_size,
-                                                                                                len(test_loader_1k)*args.batch_size,
-                                                                                                len(test_loader_shuffle)*args.batch_size))
+
+    print('{}: len(train_loader): {}\t'
+          'len(test_loader): {}\t'
+          'len(test_loader_1k): {}\t'
+          'len(test_loader_shuffle): {}'.format(
+           device,
+           len(train_loader)*args.batch_size,
+           len(test_loader)*args.batch_size,
+           len(test_loader_1k)*(32 if args.dataset == 'imagenet' else args.batch_size),
+           len(test_loader_shuffle)*(32 if args.dataset == 'imagenet' else args.batch_size)))
+
     print('{}: Dataloader compelete! Ready for alignment!'.format(device))
+
     if is_main_task:
         print('Modifying {} with {} using {}!'.format(args.source_arch, args.witness_arch, args.method))
 ##########################################################
@@ -394,32 +385,35 @@ def main_worker(gpu, ngpus_per_node, args):
 ##########################################################
     if args.distributed:
         dist.barrier()
-    if not valid_checkpoint:
-        # for _epoch in range(ckpt_epoch, args.epoch+1):
+    # if not valid_checkpoint:
+    for _epoch in range(ckpt_epoch, args.epoch+1):
         if args.distributed:
             train_sampler.set_epoch(_epoch)
-        train_acc1, train_acc5, loss, loss_history = model_align_feature_space(train_loader,
+        train_acc1, train_acc5, loss, loss_history = model_align_feature_space(
+                                                                train_loader,
                                                                 module_list,
                                                                 criterion_list,
                                                                 opt,
+                                                                _epoch,
                                                                 device,
                                                                 args,
                                                                 is_main_task)
-        del train_loader
-    # if args.distributed:
-        # dist.barrier()
+        # checkpointing for preemption
+        if is_main_task:
+            result['loss'] = loss_history[0] if _epoch == 1 else np.concatenate((result['loss'], loss_history[0]))
+            result['loss_cls'] = loss_history[1] if _epoch == 1 else np.concatenate((result['loss_cls'], loss_history[1]))
+            result['loss_kd'] = loss_history[2] if _epoch == 1 else np.concatenate((result['loss_kd'], loss_history[2]))
+            ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': _epoch+1}
+            rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
+            logger.save_log()
+
+        if args.distributed:
+            dist.barrier()
+    del train_loader
 ##########################################################
 ###################### Training ends #####################
 ##########################################################
 
-        # checkpointing for preemption
-        if is_main_task:
-            result['loss'] = loss_history[0]
-            result['loss_cls'] = loss_history[1]
-            result['loss_kd'] = loss_history[2]
-            ckpt = { "state_dict": source_model.state_dict(), 'result': result}
-            rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
-            logger.save_log()
     if args.distributed:
         dist.barrier()
     
@@ -521,11 +515,11 @@ def main_worker(gpu, ngpus_per_node, args):
 
         for key in result.keys():
             if 'loss' not in key:
-                logger.add_scalar(key, result[key], _epoch)
+                logger.add_scalar(key, result[key], args.epoch)
                 logging.info("{}: {:.2f}\t".format(key, result[key]))
             else:
-                actual_trained_epoch = len(result['loss'])
-                for i in range(actual_trained_epoch):
+                num_align_iteration = len(result['loss'])
+                for i in range(num_align_iteration):
                     logger.add_scalar(key, result[key][i], i+1)
 
     if args.distributed:
@@ -533,15 +527,16 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # upload runs to wandb:
     if is_main_task:
-        print('Saving final model!')
-        saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
+        if result['diff/avg-transfer-to'] > 0 and result['diff/avg-transfer-from'] < 0:
+            print('Saving final model!')
+            saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
         if args.enable_wandb:
             save_wandb_retry = 0
             save_wandb_successful = False
             while not save_wandb_successful and save_wandb_retry < 5:
                 print('Uploading runs to wandb...')
                 try:
-                    wandb_logger.upload(logger, actual_trained_epoch)
+                    wandb_logger.upload(logger, num_align_iteration)
                 except:
                     save_wandb_retry += 1
                     print('Retry {} times'.format(save_wandb_retry))
