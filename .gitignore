@@ -6,6 +6,7 @@
 ._.DS_Store
 /src/__pycache__/
 /models/__pycache__/
+/distiller_zoo/__pycache__/
 /notebook/test.ipynb
 .ipynb_checkpoints/
 /src/.ipynb_checkpoints/
