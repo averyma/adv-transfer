@@ -1,5 +1,5 @@
 from .FitNet import HintLoss
-from .KD import DistillKL
+from .KD import DistillKL, SymmetricKL
 from .PKT import PKT
 from .RKD import RKDLoss
 from .NCE import NCELoss
