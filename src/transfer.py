@@ -440,7 +440,7 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
         else:
             delta = 0
 
-        if args.method != 'kl':
+        if args.method not in ['kl', 'symkl']:
             features={}
             def get_features(name):
                 def hook(model, input, output):
@@ -479,7 +479,7 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
         with ctx_noparamgrad_and_eval(witness_model):
             p_w = witness_model(images+delta)
 
-        if args.method != 'kl':
+        if args.method not in ['kl', 'symkl']:
             feat_s = features['feat_s'].view(images.size(0), -1)
             feat_w = features['feat_w'].view(images.size(0), -1)
 

@@ -30,7 +30,7 @@ import torch.nn.functional as F
 import ipdb
 from src.evaluation import validate, eval_transfer, eval_transfer_bi_direction, eval_transfer_bi_direction_two_metric
 from src.transfer import model_align, model_align_feature_space
-from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss
+from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss, SymmetricKL
 
 root_dir = '/scratch/hdd001/home/ama/improve-transferability/'
 model_ckpt = {
@@ -98,7 +98,7 @@ def main_worker(gpu, ngpus_per_node, args):
     args.gpu = gpu
     device = torch.device('cuda:{}'.format(args.gpu))
 
-    assert args.method in ['kl', 'nce', 'hint', 'pkt', 'ega', 'rkd']
+    assert args.method in ['kl', 'nce', 'hint', 'pkt', 'ega', 'rkd', 'symkl']
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
@@ -148,7 +148,7 @@ def main_worker(gpu, ngpus_per_node, args):
         witness_model.load_state_dict(remove_module(ckpt))
     print('{}: Load witness model from {}.'.format(device, witness_model_dir))
 
-    if args.method != 'kl':
+    if args.method not in ['kl', 'symkl']:
         if args.source_arch != args.witness_arch:
             args.project_source_embedding = True
         else:
@@ -217,9 +217,7 @@ def main_worker(gpu, ngpus_per_node, args):
         source_model.cuda(args.gpu)
         orig_source_model.cuda(args.gpu)
         witness_model.cuda(args.gpu)
-        # if args.method != 'kl':
         if args.project_source_embedding:
-            # teac_net.cuda(args.gpu)
             source_projection.cuda(args.gpu)
         # When using a single GPU per process and per
         # DistributedDataParallel, we need to divide the batch size
@@ -231,16 +229,13 @@ def main_worker(gpu, ngpus_per_node, args):
         source_model = torch.nn.parallel.DistributedDataParallel(source_model, device_ids=[args.gpu])
         orig_source_model = torch.nn.parallel.DistributedDataParallel(orig_source_model, device_ids=[args.gpu])
         witness_model = torch.nn.parallel.DistributedDataParallel(witness_model, device_ids=[args.gpu])
-        # if args.method != 'kl':
         if args.project_source_embedding:
-            # teac_net = torch.nn.parallel.DistributedDataParallel(teac_net, device_ids=[args.gpu])
             source_projection = torch.nn.parallel.DistributedDataParallel(source_projection, device_ids=[args.gpu])
     else:
         torch.cuda.set_device(args.gpu)
         source_model = source_model.cuda(args.gpu)
         orig_source_model = orig_source_model.cuda(args.gpu)
         witness_model = witness_model.cuda(args.gpu)
-        # if args.method != 'kl':
         if args.project_source_embedding:
             source_projection = source_projection.cuda(args.gpu)
 
@@ -262,6 +257,8 @@ def main_worker(gpu, ngpus_per_node, args):
         criterion_kd = NCELoss(args.nce_temp).to(device)
     elif args.method == 'kl':
         criterion_kd = DistillKL(args.kl_temp).to(device)
+    elif args.method == 'symkl':
+        criterion_kd = SymmetricKL().to(device)
 
     criterion_list = nn.ModuleList([])
     criterion_list.append(criterion_cls)
@@ -274,7 +271,6 @@ def main_worker(gpu, ngpus_per_node, args):
     trainable_list = nn.ModuleList([])
     trainable_list.append(source_model)
 
-    # if args.method != 'kl':
     if args.project_source_embedding:
         module_list.append(source_projection)
         trainable_list.append(source_projection)
