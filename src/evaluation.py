@@ -707,14 +707,16 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
             p_b2a_NS = model_a((images+delta_b))
             p_a2b_NS = model_b((images+delta_a))
 
+        # measure accuracy and record loss
+        num_qualified = qualified.sum().item()
+        if num_qualified != 0 and update_qualified:
             p_b2a = p_b2a_NS[qualified, ::]
             p_a2b = p_a2b_NS[qualified, ::]
 
-        # measure accuracy and record loss
-        num_qualified = qualified.sum().item()
-        acc1_b2a, acc5_b2a = accuracy(p_b2a, target[qualified], topk=(1, 5))
-        acc1_a2b, acc5_a2b = accuracy(p_a2b, target[qualified], topk=(1, 5))
-        if update_qualified:
+            acc1_b2a, acc5_b2a = accuracy(p_b2a, target[qualified], topk=(1, 5))
+            acc1_a2b, acc5_a2b = accuracy(p_a2b, target[qualified], topk=(1, 5))
+
+            # if update_qualified:
             top1_b2a.update(acc1_b2a[0], num_qualified)
             top5_b2a.update(acc5_b2a[0], num_qualified)
             top1_a2b.update(acc1_a2b[0], num_qualified)
