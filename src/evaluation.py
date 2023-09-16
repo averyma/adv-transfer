@@ -757,7 +757,7 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
     for i, (images, target) in enumerate(val_loader):
         run_validate_one_iteration(images, target, update_qualified)
 
-        if is_main_task:
+        if i % args.print_freq == 0 and is_main_task:
             progress.display(i + 1)
 
         if args.distributed:
