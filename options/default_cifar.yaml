@@ -15,9 +15,6 @@ batch_size: 128
 seed: 0
 epoch: 200 
 
-enable_batchnorm: 1
-input_normalization: 0
-
 warmup: True
 warmup_multiplier: 1
 warmup_epoch: 1
@@ -25,14 +22,8 @@ warmup_epoch: 1
 # checkpoint
 ckpt_freq: 20
 
-# adversarial training
-pgd_steps: 10
-
 # wandb flag
 enable_wandb: false
-
-eval_AA: True
-eval_CC: True
 
 op_name: 'Identity'
 op_prob: 1.
