@@ -425,7 +425,7 @@ def main_worker(gpu, ngpus_per_node, args):
             result[prefix + 'test-err'] = _result
             if is_main_task:
                 print('{}: {:.2f}'.format(prefix + 'test-err', _result))
-                ckpt = { "state_dict": source_model.state_dict(), 'result': result}
+                ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
@@ -439,7 +439,7 @@ def main_worker(gpu, ngpus_per_node, args):
             result[prefix + 'whitebox-err'] = _result
             if is_main_task:
                 print('{}: {:.2f}'.format(prefix + 'whitebox-err', _result))
-                ckpt = { "state_dict": source_model.state_dict(), 'result': result}
+                ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
@@ -484,7 +484,7 @@ def main_worker(gpu, ngpus_per_node, args):
                     result['NS/'+prefix + 'transfer-to-' + target_arch] = _result_source2target_NS
                     print('{}: {:.2f}'.format('NS/'+prefix + 'transfer-to-' + target_arch, _result_source2target_NS))
 
-                    ckpt = { "state_dict": source_model.state_dict(), 'result': result}
+                    ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
 
