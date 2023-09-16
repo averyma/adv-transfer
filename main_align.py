@@ -410,7 +410,6 @@ def main_worker(gpu, ngpus_per_node, args):
 ##########################################################
 
     for (prefix, model) in zip(['pre/', 'post/'], [orig_source_model, source_model]):
-    # for (prefix, model) in zip(['pre/'], [orig_source_model]):
 
         if result[prefix + 'test-err'] is None:
             if args.distributed:
@@ -485,7 +484,7 @@ def main_worker(gpu, ngpus_per_node, args):
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
-    return 0
+
     if args.distributed:
         dist.barrier()
 
@@ -500,11 +499,10 @@ def main_worker(gpu, ngpus_per_node, args):
                 result['diff/{}'.format(_metric)] = result['post/{}'.format(_metric)] - result['pre/{}'.format(_metric)]
 
         for _metric in ['avg-transfer-from', 'avg-transfer-to']:
-            # for _prefix in ['pre/', 'post/', 'diff/']:
             for _prefix in ['pre/', 'post/', 'diff/', 'NS/pre/', 'NS/post/', 'NS/diff/']:
                 _result = 0
                 for _arch in list_target_arch:
-                    _result += result[_prefix+_metric[4:]+'-'+_arch]/3.
+                    _result += result[_prefix+_metric[4:]+'-'+_arch]/len(list_target_arch)
                 result[_prefix+_metric] = _result
 
         for key in result.keys():
