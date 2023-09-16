@@ -146,8 +146,6 @@ def parse_args():
                         default=False, type=distutils.util.strtobool)
     parser.add_argument("--misalign",
                         default=False, type=distutils.util.strtobool)
-    # parser.add_argument("--ce_regularized",
-                        # default=False, type=distutils.util.strtobool)
     # the following pgd params are used in whitebox and transfer evaluations
     # if alignment is performed at pgd perturbed datapoint, the same pgd_eps, pgd_alpha
     # will be used, the number of iteration is specified in ${noise_type}
