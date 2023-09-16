@@ -381,7 +381,6 @@ def main_worker(gpu, ngpus_per_node, args):
 ##########################################################
     if args.distributed:
         dist.barrier()
-    # if not valid_checkpoint:
     for _epoch in range(ckpt_epoch, args.epoch+1):
         if args.distributed:
             train_sampler.set_epoch(_epoch)
@@ -410,10 +409,8 @@ def main_worker(gpu, ngpus_per_node, args):
 ###################### Training ends #####################
 ##########################################################
 
-    if args.distributed:
-        dist.barrier()
-    
     for (prefix, model) in zip(['pre/', 'post/'], [orig_source_model, source_model]):
+    # for (prefix, model) in zip(['pre/'], [orig_source_model]):
 
         if result[prefix + 'test-err'] is None:
             if args.distributed:
@@ -448,6 +445,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 args.arch = target_arch
                 target_model = get_model(args)
                 target_model_dir = root_dir + model_ckpt[args.dataset][target_arch] + '1/model/best_model.pt'
+                print('{}: Load target model from {}.'.format(device, target_model_dir))
                 ckpt = torch.load(target_model_dir, map_location=device)
                 try:
                     target_model.load_state_dict(ckpt)
@@ -461,16 +459,16 @@ def main_worker(gpu, ngpus_per_node, args):
                     dist.barrier()
                     if args.dataset == 'imagenet':
                         val_sampler.set_epoch(27)
-                test_acc1_target2source, test_acc1_source2target, test_acc1_target2source_NS, test_acc1_source2target_NS = eval_transfer_bi_direction_two_metric(
+                acc1_target2source, acc1_source2target, acc1_target2source_NS, acc1_source2target_NS = eval_transfer_bi_direction_two_metric(
                                                                     test_loader_shuffle,
                                                                     model_a=target_model,
-                                                                    model_b=source_model,
+                                                                    model_b=model,
                                                                     args=args,
                                                                     is_main_task=is_main_task)
-                _result_target2source = 100.-test_acc1_target2source
-                _result_source2target = 100.-test_acc1_source2target
-                _result_target2source_NS = 100.-test_acc1_target2source_NS
-                _result_source2target_NS = 100.-test_acc1_source2target_NS
+                _result_target2source = 100.-acc1_target2source
+                _result_source2target = 100.-acc1_source2target
+                _result_target2source_NS = 100.-acc1_target2source_NS
+                _result_source2target_NS = 100.-acc1_source2target_NS
                 if args.distributed:
                     dist.barrier()
                 if is_main_task:
@@ -487,7 +485,7 @@ def main_worker(gpu, ngpus_per_node, args):
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
-
+    return 0
     if args.distributed:
         dist.barrier()
 
