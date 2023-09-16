@@ -25,4 +25,5 @@ launch_slurm_job_single_node_multi_gpu.sh
 run_cifar10_cifar100.sh
 run_imagenet.sh
 run_eval.sh
+run_align.sh
 launch_slurm_job.sh
