@@ -517,7 +517,7 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i % args.print_freq == 0 and is_main_task:
+        if (i % args.print_freq == 0 and is_main_task) or args.debug:
             progress.display(i + 1)
         if args.debug and i == 2:
             break
