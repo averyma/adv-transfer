@@ -671,16 +671,11 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
              'dataset': args.dataset}
     param['num_iter'] = 1 if args.debug else args.pgd_itr
     attacker = pgd(**param)
-    if args.dataset == 'imagenet':
-        num_eval = 100 if args.debug else 1000
-        # NS: no selection
-        num_eval_NS = 100 if args.debug else 1000
-    else:
-        num_eval = 100 if args.debug else 10000
-        # NS: no selection
-        num_eval_NS = 100 if args.debug else 10000
+    
+    num_eval = 1000 if args.dataset == 'imagenet' else 10000
+    num_eval = 100 if args.debug else num_eval
 
-    def run_validate_one_iteration(images, target, update_qualified):
+    def run_validate_one_iteration(images, target):
         end = time.time()
         if args.gpu is not None and torch.cuda.is_available():
             images = images.cuda(args.gpu, non_blocking=True)
@@ -709,19 +704,17 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
 
         # measure accuracy and record loss
         num_qualified = qualified.sum().item()
-        if num_qualified != 0 and update_qualified:
-            p_b2a = p_b2a_NS[qualified, ::]
-            p_a2b = p_a2b_NS[qualified, ::]
+        p_b2a = p_b2a_NS[qualified, ::]
+        p_a2b = p_a2b_NS[qualified, ::]
 
-            acc1_b2a, acc5_b2a = accuracy(p_b2a, target[qualified], topk=(1, 5))
-            acc1_a2b, acc5_a2b = accuracy(p_a2b, target[qualified], topk=(1, 5))
+        acc1_b2a, acc5_b2a = accuracy(p_b2a, target[qualified], topk=(1, 5))
+        acc1_a2b, acc5_a2b = accuracy(p_a2b, target[qualified], topk=(1, 5))
 
-            # if update_qualified:
-            top1_b2a.update(acc1_b2a[0], num_qualified)
-            top5_b2a.update(acc5_b2a[0], num_qualified)
-            top1_a2b.update(acc1_a2b[0], num_qualified)
-            top5_a2b.update(acc5_a2b[0], num_qualified)
-            total_qualified.update(num_qualified)
+        top1_b2a.update(acc1_b2a[0], num_qualified)
+        top5_b2a.update(acc5_b2a[0], num_qualified)
+        top1_a2b.update(acc1_a2b[0], num_qualified)
+        top5_a2b.update(acc5_a2b[0], num_qualified)
+        total_qualified.update(num_qualified)
 
         acc1_b2a_NS, acc5_b2a_NS = accuracy(p_b2a_NS, target, topk=(1, 5))
         acc1_a2b_NS, acc5_a2b_NS = accuracy(p_a2b_NS, target, topk=(1, 5))
@@ -755,19 +748,13 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
     model_a.eval()
     model_b.eval()
 
-    update_qualified=True
     for i, (images, target) in enumerate(val_loader):
-        run_validate_one_iteration(images, target, update_qualified)
+        run_validate_one_iteration(images, target)
 
-        if i % args.print_freq == 0 and is_main_task:
+        if (i % args.print_freq == 0 and is_main_task) or args.debug:
             progress.display(i + 1)
 
-        if args.distributed:
-            total_qualified.all_reduce()
-
         if total_qualified.sum > (num_eval/args.ngpus_per_node):
-            update_qualified = False
-        if total_eval.sum > (num_eval_NS/args.ngpus_per_node):
             break
 
     if args.distributed:
