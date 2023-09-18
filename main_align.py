@@ -243,6 +243,46 @@ def main_worker(gpu, ngpus_per_node, args):
 
     print('{}: is_main_task: {}'.format(device, is_main_task))
 
+    ckpt_dir = args.j_dir+"/"+str(args.j_id)+"/"
+    ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
+    ckpt_location_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
+
+    valid_checkpoint = False
+    for ckpt_location in [ckpt_location_prev, ckpt_location_curr]:
+        if os.path.exists(ckpt_location):
+            load_ckpt_retry = 0
+            load_ckpt_successful = False
+            while not load_ckpt_successful and load_ckpt_retry < 5:
+                load_ckpt_retry += 1
+                print("{}: Checkpoint found at {}".format(device, ckpt_location))
+                print("{}: Loading ckpt. Attempt: {}".format(device, load_ckpt_retry))
+                try:
+                    torch.load(ckpt_location)
+                except:
+                    print("{}: Corrupted ckpt!".format(device))
+                else:
+                    print("{}: Checkpoint verified!".format(device))
+                    load_ckpt_successful = True
+                    valid_checkpoint = True
+                    load_this_ckpt = ckpt_location
+    if args.distributed:
+        dist.barrier()
+
+    ckpt_epoch = 1
+
+    if valid_checkpoint and os.path.exists(load_this_ckpt):
+        ckpt = torch.load(load_this_ckpt, map_location=device)
+        source_model.load_state_dict(ckpt["state_dict"])
+        result = ckpt['result']
+        ckpt_epoch = ckpt['ckpt_epoch']
+        if args.project_source_embedding:
+            source_projection.load_state_dict(ckpt['projection'])
+        print("{}: CHECKPOINT LOADED!".format(device))
+        del ckpt
+        torch.cuda.empty_cache()
+    else:
+        print('{}: NO CHECKPOINT LOADED, FRESH START!'.format(device))
+
     criterion_cls = nn.CrossEntropyLoss().to(device)
 
     if args.method == 'rkd':
@@ -276,44 +316,6 @@ def main_worker(gpu, ngpus_per_node, args):
         trainable_list.append(source_projection)
 
     opt, _ = get_optim(trainable_list, args)
-
-    ckpt_dir = args.j_dir+"/"+str(args.j_id)+"/"
-    ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
-    ckpt_location_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
-
-    valid_checkpoint = False
-    for ckpt_location in [ckpt_location_prev, ckpt_location_curr]:
-        if os.path.exists(ckpt_location):
-            load_ckpt_retry = 0
-            load_ckpt_successful = False
-            while not load_ckpt_successful and load_ckpt_retry < 5:
-                load_ckpt_retry += 1
-                print("{}: Checkpoint found at {}".format(device, ckpt_location))
-                print("{}: Loading ckpt. Attempt: {}".format(device, load_ckpt_retry))
-                try:
-                    torch.load(ckpt_location)
-                except:
-                    print("{}: Corrupted ckpt!".format(device))
-                else:
-                    print("{}: Checkpoint verified!".format(device))
-                    load_ckpt_successful = True
-                    valid_checkpoint = True
-                    load_this_ckpt = ckpt_location
-    if args.distributed:
-        dist.barrier()
-
-    ckpt_epoch = 1
-
-    if valid_checkpoint and os.path.exists(load_this_ckpt):
-        ckpt = torch.load(load_this_ckpt, map_location=device)
-        source_model.load_state_dict(ckpt["state_dict"])
-        result = ckpt['result']
-        ckpt_epoch = ckpt['ckpt_epoch']
-        print("{}: CHECKPOINT LOADED!".format(device))
-        del ckpt
-        torch.cuda.empty_cache()
-    else:
-        print('{}: NO CHECKPOINT LOADED, FRESH START!'.format(device))
 
     if args.distributed:
         dist.barrier()
@@ -398,7 +400,9 @@ def main_worker(gpu, ngpus_per_node, args):
             result['loss'] = loss_history[0] if _epoch == 1 else np.concatenate((result['loss'], loss_history[0]))
             result['loss_cls'] = loss_history[1] if _epoch == 1 else np.concatenate((result['loss_cls'], loss_history[1]))
             result['loss_kd'] = loss_history[2] if _epoch == 1 else np.concatenate((result['loss_kd'], loss_history[2]))
-            ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': _epoch+1}
+            ckpt = {"state_dict": module_list[0].state_dict(), 'result': result, 'ckpt_epoch': _epoch+1}
+            if args.project_source_embedding:
+                ckpt['projection'] = module_list[2].state_dict()
             rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
             logger.save_log()
 
@@ -542,9 +546,13 @@ def main_worker(gpu, ngpus_per_node, args):
 
         logger.save_log(is_final_result=True)
 
+    if args.distributed:
+        dist.barrier()
+
     # delete slurm checkpoints
     if is_main_task:
         delCheckpoint(args.j_dir, args.j_id)
+
     if args.distributed:
         ddp_cleanup()
 
