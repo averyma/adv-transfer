@@ -424,8 +424,10 @@ def main_worker(gpu, ngpus_per_node, args):
                 dist.barrier()
             result[prefix + 'test-err'] = _result
             if is_main_task:
-                print('{}: {:.2f}'.format(prefix + 'test-err', _result))
+                print(' *  {}: {:.2f}'.format(prefix + 'test-err', _result))
                 ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
+                if args.project_source_embedding:
+                    ckpt['projection'] = module_list[2].state_dict()
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
@@ -438,8 +440,10 @@ def main_worker(gpu, ngpus_per_node, args):
                 dist.barrier()
             result[prefix + 'whitebox-err'] = _result
             if is_main_task:
-                print('{}: {:.2f}'.format(prefix + 'whitebox-err', _result))
+                print(' *  {}: {:.2f}'.format(prefix + 'whitebox-err', _result))
                 ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
+                if args.project_source_embedding:
+                    ckpt['projection'] = module_list[2].state_dict()
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
@@ -468,6 +472,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                                                     model_b=model,
                                                                     args=args,
                                                                     is_main_task=is_main_task)
+
                 _result_target2source = 100.-acc1_target2source
                 _result_source2target = 100.-acc1_source2target
                 _result_target2source_NS = 100.-acc1_target2source_NS
@@ -476,16 +481,18 @@ def main_worker(gpu, ngpus_per_node, args):
                     dist.barrier()
                 if is_main_task:
                     result[prefix + 'transfer-from-' + target_arch] = _result_target2source
-                    print('{}: {:.2f}'.format(prefix + 'transfer-from-' + target_arch, _result_target2source))
+                    print(' *  {}: {:.2f}'.format(prefix + 'transfer-from-' + target_arch, _result_target2source))
                     result[prefix + 'transfer-to-' + target_arch] = _result_source2target
-                    print('{}: {:.2f}'.format(prefix + 'transfer-to-' + target_arch, _result_source2target))
+                    print(' *  {}: {:.2f}'.format(prefix + 'transfer-to-' + target_arch, _result_source2target))
 
                     result['NS/'+prefix + 'transfer-from-' + target_arch] = _result_target2source_NS
-                    print('{}: {:.2f}'.format('NS/'+prefix + 'transfer-from-' + target_arch, _result_target2source_NS))
+                    print(' *  {}: {:.2f}'.format('NS/'+prefix + 'transfer-from-' + target_arch, _result_target2source_NS))
                     result['NS/'+prefix + 'transfer-to-' + target_arch] = _result_source2target_NS
-                    print('{}: {:.2f}'.format('NS/'+prefix + 'transfer-to-' + target_arch, _result_source2target_NS))
+                    print(' *  {}: {:.2f}'.format('NS/'+prefix + 'transfer-to-' + target_arch, _result_source2target_NS))
 
                     ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
+                    if args.project_source_embedding:
+                        ckpt['projection'] = module_list[2].state_dict()
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
 
