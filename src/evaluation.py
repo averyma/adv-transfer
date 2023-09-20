@@ -754,6 +754,9 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
         if (i % args.print_freq == 0 and is_main_task) or args.debug:
             progress.display(i + 1)
 
+        if args.distributed:
+            total_qualified.all_reduce()
+
         if total_qualified.sum > (num_eval/args.ngpus_per_node):
             break
 
