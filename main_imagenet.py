@@ -333,7 +333,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 saveModel(args.j_dir+"/model/", "best_model", model.state_dict())
 
         # Early terminate training when half way thru training and test accuracy still below 20%
-        if np.isnan(loss) or (_epoch > int(args.epoch/2) and test_acc1 < 20):
+        if (np.isnan(loss) or (_epoch > int(args.epoch/2) and test_acc1 < 20)) and not args.debug:
             print('{}: Early stopping at epoch {}.'.format(device, _epoch))
             actual_trained_epoch = _epoch
             saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
