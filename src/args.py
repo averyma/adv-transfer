@@ -109,13 +109,12 @@ def parse_args():
                         default=0., type=float)
     parser.add_argument('--clip_grad_norm',
                         default=None, type=float)
+    parser.add_argument('--auto_augment',
+                        default=False, type=distutils.util.strtobool)
+    parser.add_argument('--ra_sampler',
+                        default=False, type=distutils.util.strtobool)
     parser.add_argument('--use-v2',
                         action="store_true")
-    parser.add_argument('--ra_sampler',
-                        action="store_true")
-    parser.add_argument("--ra_reps",
-                        default=3, type=int,
-                        help="number of repetitions for Repeated Augmentation (default: 3)")
     # parser.add_argument("--model_ema", action="store_true",
                         # help="enable tracking Exponential Moving Average of model parameters")
     # parser.add_argument("--model_ema_steps",

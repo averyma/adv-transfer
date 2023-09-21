@@ -13,13 +13,14 @@ from PIL import Image
 import math
 
 from src.utils_augmentation import CustomAugment
+from src.sampler import RASampler
 # from data.Caltech101.caltech_dataset import Caltech
 # from sklearn.model_selection import train_test_split
 # from torch.utils.data import Subset
 
 data_dir = '/scratch/ssd001/home/ama/workspace/data/'
 
-def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_magnitude=9, workers=4, distributed=False):
+def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_magnitude=9, workers=4, distributed=False, auto_augment=False, ra_sampler=False):
 
     # default augmentation
     if dataset.startswith('cifar') or dataset == 'svhn':
@@ -49,12 +50,14 @@ def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_mag
         # detail: https://discuss.pytorch.org/t/normalization-in-the-mnist-example/457/7
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
-        transform_train = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=(0.08, 1.0), interpolation=Image.BICUBIC),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean, std)
-        ])
+        transform_list = [transforms.RandomResizedCrop(224, scale=(0.08, 1.0), interpolation=Image.BICUBIC),
+                          transforms.RandomHorizontalFlip()]
+        if auto_augment:
+            transform_list.append(transforms.AutoAugment())
+        transform_list.append(transforms.ToTensor())
+        transform_list.append(transforms.Normalize(mean, std))
+
+        transform_train = transforms.Compose(transform_list)
 
         transform_test = transforms.Compose([
             transforms.Resize(256, interpolation=Image.BICUBIC),
@@ -100,7 +103,10 @@ def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_mag
         data_test = datasets.ImageFolder(valdir,transform_test)
 
     if distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(data_train)
+        if ra_sampler:
+            train_sampler = RASampler(data_train, shuffle=True, repetitions=3)
+        else:
+            train_sampler = torch.utils.data.distributed.DistributedSampler(data_train)
         val_sampler = torch.utils.data.distributed.DistributedSampler(data_test, shuffle=False, drop_last=True)
     else:
         train_sampler = torch.utils.data.RandomSampler(data_train)
