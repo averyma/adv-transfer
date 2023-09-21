@@ -357,10 +357,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # upload runs to wandb:
     if is_main_task:
-        if args.save_modified_model:
-            print('Saving final model!')
-            saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
-            print('Final model saved!')
+        print('Saving final model!')
+        saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
+        print('Final model saved!')
         print('Final model trained for {} epochs, test accuracy: {}%'.format(actual_trained_epoch, test_acc1))
         print('Best model has a test accuracy of {}%'.format(best_acc1))
         if args.enable_wandb:
