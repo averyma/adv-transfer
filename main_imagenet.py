@@ -76,6 +76,7 @@ def main_worker(gpu, ngpus_per_node, args):
     global best_acc1
     args.ngpus_per_node = ngpus_per_node
     args.gpu = gpu
+    device = torch.device('cuda:{}'.format(args.gpu))
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
@@ -113,8 +114,6 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
-
-    device = torch.device('cuda:{}'.format(args.gpu))
 
     is_main_task = not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)
 
@@ -253,7 +252,9 @@ def main_worker(gpu, ngpus_per_node, args):
                 args.op_prob,
                 args.op_magnitude,
                 args.workers,
-                args.distributed
+                args.distributed,
+                args.auto_augment,
+                args.ra_sampler
                 )
 
     num_classes = 1000
@@ -356,9 +357,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # upload runs to wandb:
     if is_main_task:
-        print('Saving final model!')
-        saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
-        print('Final model saved!')
+        if args.save_modified_model:
+            print('Saving final model!')
+            saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
+            print('Final model saved!')
         print('Final model trained for {} epochs, test accuracy: {}%'.format(actual_trained_epoch, test_acc1))
         print('Best model has a test accuracy of {}%'.format(best_acc1))
         if args.enable_wandb:
@@ -384,6 +386,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # delete slurm checkpoints
     if is_main_task:
         delCheckpoint(args.j_dir, args.j_id)
+
     if args.distributed:
         ddp_cleanup()
 
