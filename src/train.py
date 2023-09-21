@@ -113,7 +113,7 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args, is_mai
 
         if i % args.print_freq == 0 and is_main_task:
             progress.display(i + 1)
-        if args.debug:
+        if args.debug and i == 2:
             break
 
     return top1.avg, top5.avg, losses.avg
