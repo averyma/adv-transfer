@@ -530,7 +530,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # upload runs to wandb:
     if is_main_task:
-        if result['diff/avg-transfer-to'] > 0 and result['diff/avg-transfer-from'] < 0:
+        # if result['diff/avg-transfer-to'] > 0 and result['diff/avg-transfer-from'] < 0:
+        if args.save_modified_model:
             print('Saving final model!')
             saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
         if args.enable_wandb:
