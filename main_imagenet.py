@@ -256,7 +256,12 @@ def main_worker(gpu, ngpus_per_node, args):
                 args.ra_sampler
                 )
 
-    num_classes = 1000
+    if args.dataset == 'imagenet':
+        num_classes = 1000
+    elif args.dataset == 'cifar100':
+        num_classes = 100
+    elif args.dataset == 'cifar10':
+        num_classes = 10
     mixup_cutmix = get_mixup_cutmix(
             mixup_alpha=args.mixup_alpha,
             cutmix_alpha=args.cutmix_alpha,
