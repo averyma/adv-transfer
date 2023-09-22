@@ -341,8 +341,6 @@ def main_worker(gpu, ngpus_per_node, args):
                 args.batch_size,
                 args.workers,
                 args.distributed,
-                args.auto_augment,
-                args.ra_sampler
                 )
 
     if args.dataset == 'imagenet':
