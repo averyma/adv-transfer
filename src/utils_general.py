@@ -129,3 +129,12 @@ def ep2itr(epoch, loader):
     batch_size = loader.batch_size
     iteration = epoch * np.ceil(data_len/batch_size)
     return iteration
+
+def remove_module(state_dict):
+    # create new OrderedDict that does not contain `module.`
+    from collections import OrderedDict
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        name = k[7:] # remove `module.`
+        new_state_dict[name] = v
+    return new_state_dict

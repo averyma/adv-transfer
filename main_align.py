@@ -21,7 +21,7 @@ from src.evaluation import test_clean, test_AA, eval_corrupt, eval_CE, test_gaus
 
 from src.utils_dataset import load_dataset, load_imagenet_test_shuffle, load_imagenet_test_1k
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
-from src.utils_general import seed_everything, get_model, get_optim
+from src.utils_general import seed_everything, get_model, get_optim, remove_module
 from src.transforms import get_mixup_cutmix
 import copy
 from src.attacks import pgd
@@ -563,15 +563,6 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.distributed:
         ddp_cleanup()
-
-def remove_module(state_dict):
-    # create new OrderedDict that does not contain `module.`
-    from collections import OrderedDict
-    new_state_dict = OrderedDict()
-    for k, v in state_dict.items():
-        name = k[7:] # remove `module.`
-        new_state_dict[name] = v
-    return new_state_dict
 
 if __name__ == "__main__":
     main()
