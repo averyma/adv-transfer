@@ -6,7 +6,6 @@ from src.presets import get_module
 from torch import Tensor
 from torchvision.transforms import functional as F
 
-
 def get_mixup_cutmix(*, mixup_alpha, cutmix_alpha, num_categories, use_v2):
     transforms_module = get_module(use_v2)
 
@@ -19,9 +18,9 @@ def get_mixup_cutmix(*, mixup_alpha, cutmix_alpha, num_categories, use_v2):
         )
     if cutmix_alpha > 0:
         mixup_cutmix.append(
-            transforms_module.CutMix(alpha=mixup_alpha, num_categories=num_categories)
+            transforms_module.CutMix(alpha=cutmix_alpha, num_categories=num_categories)
             if use_v2
-            else RandomCutMix(num_classes=num_categories, p=1.0, alpha=mixup_alpha)
+            else RandomCutMix(num_classes=num_categories, p=1.0, alpha=cutmix_alpha)
         )
     if not mixup_cutmix:
         return None
