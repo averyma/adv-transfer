@@ -69,14 +69,6 @@ def parse_args():
     parser.add_argument('--enable_batchnorm',
                         default=argparse.SUPPRESS, type=distutils.util.strtobool)
 
-    # various augmentations:
-    parser.add_argument("--op_name",
-                        default=argparse.SUPPRESS, type=str)
-    parser.add_argument("--op_prob",
-                        default=argparse.SUPPRESS, type=float)
-    parser.add_argument("--op_magnitude",
-                        default=argparse.SUPPRESS, type=int)
-
     # imagenet training
     parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')

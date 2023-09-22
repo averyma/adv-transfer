@@ -20,7 +20,7 @@ from src.sampler import RASampler
 
 data_dir = '/scratch/ssd001/home/ama/workspace/data/'
 
-def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_magnitude=9, workers=4, distributed=False, auto_augment=False, ra_sampler=False):
+def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_augment=False, ra_sampler=False):
 
     # default augmentation
     if dataset.startswith('cifar') or dataset == 'svhn':
@@ -67,20 +67,8 @@ def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_mag
         ])
     elif dataset == 'dummy':
         pass
-    elif dataset in ['imagenet-a', 'imagenet-o', 'imagenet-r']:
-        transform_test = transforms.Compose([
-            transforms.Resize(256, interpolation=Image.BICUBIC),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-        ])
     else:
         raise ValueError('invalid dataset name=%s' % dataset)
-    
-    # apply custom augmentation if op_name is not identity
-    if op_name != 'Identity' and dataset in ['cifar10', 'cifar100', 'imagenet']:
-        transform_train.transforms.insert(1 if dataset.startswith('cifar') else 2,
-                CustomAugment(op_name=op_name, op_prob=op_prob, magnitude=op_magnitude))
-        print(transform_train)
     
     # load dataset
     if dataset == 'cifar10':
@@ -112,12 +100,9 @@ def load_dataset(dataset, batch_size=128, op_name='Identity', op_prob=1., op_mag
         train_sampler = torch.utils.data.RandomSampler(data_train)
         val_sampler = torch.utils.data.SequentialSampler(data_test)
 
-    if dataset not in ['imagenet-a', 'imagenet-o', 'imagenet-r']:
-        train_loader = torch.utils.data.DataLoader(
-            data_train, batch_size=batch_size, shuffle=(train_sampler is None),
-            num_workers=workers, pin_memory=True, sampler=train_sampler)
-    else:
-        train_loader = None
+    train_loader = torch.utils.data.DataLoader(
+        data_train, batch_size=batch_size, shuffle=(train_sampler is None),
+        num_workers=workers, pin_memory=True, sampler=train_sampler)
 
     test_loader = torch.utils.data.DataLoader(
         data_test, batch_size=batch_size, shuffle=False,
@@ -186,27 +171,4 @@ def load_imagenet_test_1k(batch_size=128, workers=4, distributed=False):
         data_test_1k, batch_size=batch_size, shuffle=False,
         num_workers=workers, pin_memory=True, sampler=val_sampler)
 
-    return test_loader
-
-def load_IMAGENET_C(batch_size=32, distortion_name='brightness', severity=1, workers=4, distributed=False):
-    
-    transform = transforms.Compose([
-        transforms.Resize(256, interpolation=Image.BICUBIC),
-        transforms.CenterCrop(224), 
-        transforms.ToTensor()])
-    
-    data_root = '/scratch/ssd002/datasets/imagenet-c/' + distortion_name + '/' + str(severity) + '/'
-    
-    distorted_dataset = datasets.ImageFolder(
-            root=data_root,
-            transform=transform)
-    
-    if distributed:
-        val_sampler = torch.utils.data.distributed.DistributedSampler(data_test, shuffle=False, drop_last=True)
-    else:
-        val_sampler = None
-
-    test_loader = torch.utils.data.DataLoader(
-        distorted_dataset, batch_size=batch_size, shuffle=False,
-        num_workers=workers, pin_memory=True, sampler=val_sampler)
     return test_loader

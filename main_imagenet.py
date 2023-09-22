@@ -22,9 +22,9 @@ import numpy as np
 from src.args import get_args, print_args
 from src.evaluation import test_clean, test_AA, eval_corrupt, eval_CE, test_gaussian, CORRUPTIONS_IMAGENET_C
 
-from src.utils_dataset import load_dataset, load_IMAGENET_C
+from src.utils_dataset import load_dataset
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
-from src.utils_general import seed_everything, get_model, get_optim
+from src.utils_general import seed_everything, get_model, get_optim, remove_module
 from src.transforms import get_mixup_cutmix
 # import dill as pickle
 from src.train import train
@@ -49,6 +49,9 @@ def main():
     args = get_args()
 
     print_args(args)
+
+    if args.debug:
+        print('*** DEBUG MODE ***')
 
     seed_everything(args.seed)
 
@@ -210,20 +213,19 @@ def main_worker(gpu, ngpus_per_node, args):
         ckpt = torch.load(load_this_ckpt, map_location=device)
         try:
             model.load_state_dict(ckpt["state_dict"])
-            opt.load_state_dict(ckpt["optimizer"])
-            ckpt_epoch = ckpt["epoch"]
-            best_acc1 = ckpt['best_acc1']
-            if lr_scheduler is not None:
-                for _dummy in range(ckpt_epoch-1):
-                    lr_scheduler.step()
-            if scaler is not None:
-                scaler.load_state_dict(ckpt["scaler"])
-            print("{}: CHECKPOINT LOADED!".format(device))
-            del ckpt
-            torch.cuda.empty_cache()
-        except KeyError:
-            print("{}: Key Error in loading ckpt!".format(device))
-            return 0
+        except RuntimeError:
+            model.load_state_dict(remove_module(ckpt['state_dict']))
+        opt.load_state_dict(ckpt["optimizer"])
+        ckpt_epoch = ckpt["epoch"]
+        best_acc1 = ckpt['best_acc1']
+        if lr_scheduler is not None:
+            for _dummy in range(ckpt_epoch-1):
+                lr_scheduler.step()
+        if scaler is not None:
+            scaler.load_state_dict(ckpt["scaler"])
+        print("{}: CHECKPOINT LOADED!".format(device))
+        del ckpt
+        torch.cuda.empty_cache()
     else:
         print('{}: NO CHECKPOINT LOADED, FRESH START!'.format(device))
 
@@ -248,9 +250,6 @@ def main_worker(gpu, ngpus_per_node, args):
     train_loader, test_loader, train_sampler, val_sampler = load_dataset(
                 args.dataset,
                 args.batch_size,
-                args.op_name,
-                args.op_prob,
-                args.op_magnitude,
                 args.workers,
                 args.distributed,
                 args.auto_augment,

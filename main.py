@@ -109,10 +109,7 @@ def main():
     seed_everything(args.seed)
     train_loader, test_loader, _, _ = load_dataset(
                                     args.dataset,
-                                    args.batch_size,
-                                    args.op_name,
-                                    args.op_prob,
-                                    args.op_magnitude)
+                                    args.batch_size)
 
     if args.dataset in ['cifar100', 'cifar10']:
         l2_eps_list = [0.1, 0.2, 0.3]

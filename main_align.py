@@ -339,11 +339,10 @@ def main_worker(gpu, ngpus_per_node, args):
     train_loader, test_loader, train_sampler, _ = load_dataset(
                 args.dataset,
                 args.batch_size,
-                args.op_name,
-                args.op_prob,
-                args.op_magnitude,
                 args.workers,
-                args.distributed
+                args.distributed,
+                args.auto_augment,
+                args.ra_sampler
                 )
 
     if args.dataset == 'imagenet':
