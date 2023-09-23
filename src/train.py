@@ -2,18 +2,10 @@ import torch
 import torch.nn as nn
 
 from tqdm import trange
-# import numpy as np
-from src.utils_log import Summary, AverageMeter, ProgressMeter
 import time
+
+from src.utils_log import Summary, AverageMeter, ProgressMeter
 from src.evaluation import accuracy
-
-# from src.attacks import pgd
-# from src.context import ctx_noparamgrad_and_eval
-# from src.utils_general import ep2itr
-# from src.utils_freq import rgb2gray, dct, dct2, idct, idct2, batch_dct, batch_dct2, batch_idct2, getDCTmatrix,batch_dct2_3channel,batch_idct2_3channel
-# import ipdb
-
-# from collections import defaultdict
 
 AVOID_ZERO_DIV = 1e-6
 
