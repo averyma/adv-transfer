@@ -34,15 +34,14 @@ def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_aug
             mean = [0.4376821, 0.4437697, 0.47280442]
             std = [0.19803012, 0.20101562, 0.19703614]
 
-        transform_train = transforms.Compose([
-            # using 0.75 has a similar effect as pad 4 and randcrop
-            # April 4 commented because it seems to cause NaN in training
-            # transforms.RandomResizedCrop(32, scale=(0.75, 1.0), interpolation=Image.BICUBIC), 
-            transforms.RandomCrop(32, padding=2),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean, std)
-        ])
+        transform_list = [transforms.RandomCrop(32, padding=2),
+                          transforms.RandomHorizontalFlip()]
+        if auto_augment:
+            transform_list.append(transforms.AutoAugment())
+        transform_list.append(transforms.ToTensor())
+        transform_list.append(transforms.Normalize(mean, std))
+
+        transform_train = transforms.Compose(transform_list)
         transform_test = transforms.Compose([transforms.ToTensor(),
                                              transforms.Normalize(mean, std)])
     elif dataset == 'imagenet':
