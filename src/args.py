@@ -29,11 +29,14 @@ def parse_args():
     			default=argparse.SUPPRESS, type=float)
     parser.add_argument("--nesterov",
                         default=argparse.SUPPRESS, type=distutils.util.strtobool)
-    parser.add_argument("--warmup",
-                        default=argparse.SUPPRESS, type=distutils.util.strtobool)
-    parser.add_argument("--warmup_multiplier",
+
+    parser.add_argument("--lr_warmup_type",
+    			default=argparse.SUPPRESS)
+    parser.add_argument("--lr_warmup_multiplier",
     			default=argparse.SUPPRESS, type=float)
-    parser.add_argument("--warmup_epoch",
+    parser.add_argument("--lr_warmup_epoch",
+    			default=argparse.SUPPRESS, type=int)
+    parser.add_argument("--lr_warmup_decay",
     			default=argparse.SUPPRESS, type=int)
 
     parser.add_argument("--batch_size",
