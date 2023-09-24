@@ -315,7 +315,7 @@ def main_worker(gpu, ngpus_per_node, args):
         module_list.append(source_projection)
         trainable_list.append(source_projection)
 
-    opt, _ = get_optim(trainable_list, args)
+    opt, _ = get_optim(trainable_list.parameters(), args)
 
     if args.distributed:
         dist.barrier()

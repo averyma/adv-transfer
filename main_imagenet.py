@@ -24,7 +24,7 @@ from src.evaluation import test_clean, test_AA, eval_corrupt, eval_CE, test_gaus
 
 from src.utils_dataset import load_dataset
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
-from src.utils_general import seed_everything, get_model, get_optim, remove_module
+from src.utils_general import seed_everything, get_model, get_optim, remove_module, set_weight_decay
 from src.transforms import get_mixup_cutmix
 # import dill as pickle
 from src.train import train
@@ -118,13 +118,18 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
 
+    parameters = set_weight_decay(
+        model,
+        args.weight_decay,
+    )
+
     is_main_task = not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)
 
     print('{}: is_main_task: {}'.format(device, is_main_task))
 
     criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing).to(device)
 
-    opt, lr_scheduler = get_optim(model, args)
+    opt, lr_scheduler = get_optim(parameters, args)
     scaler = torch.cuda.amp.GradScaler() if args.amp else None
     if is_main_task:
         print('{}: agrs.amp: {}, scaler: {}'.format(device, args.amp, scaler))
@@ -219,8 +224,9 @@ def main_worker(gpu, ngpus_per_node, args):
         ckpt_epoch = ckpt["epoch"]
         best_acc1 = ckpt['best_acc1']
         if lr_scheduler is not None:
-            for _dummy in range(ckpt_epoch-1):
-                lr_scheduler.step()
+            lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
+            # for _dummy in range(ckpt_epoch-1):
+                # lr_scheduler.step()
         if scaler is not None:
             scaler.load_state_dict(ckpt["scaler"])
         print("{}: CHECKPOINT LOADED!".format(device))
@@ -328,6 +334,8 @@ def main_worker(gpu, ngpus_per_node, args):
                         }
                 if scaler is not None:
                     ckpt["scaler"] = scaler.state_dict()
+                if lr_scheduler is not None:
+                    ckpt["lr_scheduler"] = lr_scheduler.state_dict()
 
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()

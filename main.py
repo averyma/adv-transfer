@@ -11,7 +11,7 @@ from src.evaluation import test_clean, test_AA, eval_corrupt, eval_CE, test_gaus
 from src.args import get_args, print_args
 from src.utils_dataset import load_dataset
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
-from src.utils_general import seed_everything, get_model, get_optim
+from src.utils_general import seed_everything, get_model, get_optim, set_weight_decay
 import ipdb
 
 
@@ -117,7 +117,13 @@ def main():
         eval_threshold = 40 if args.dataset == 'cifar100' else 60
 
     model = get_model(args, device)
-    opt, lr_scheduler = get_optim(model, args)
+
+    parameters = set_weight_decay(
+        model,
+        args.weight_decay,
+    )
+
+    opt, lr_scheduler = get_optim(model.parameters(), args)
     ckpt_epoch = 1
 
     if logger.ckpt_status in ['curr', 'prev']:
@@ -129,8 +135,9 @@ def main():
             ckpt_epoch = ckpt["epoch"]
             best_acc1 = ckpt["best_acc1"]
             if lr_scheduler is not None:
-                for _dummy in range(ckpt_epoch-1):
-                    lr_scheduler.step()
+                lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
+                # for _dummy in range(ckpt_epoch-1):
+                    # lr_scheduler.step()
             print("LOADED CHECKPOINT")
     else:
         print("CHECKPOINT STATUS: {}".format(logger.ckpt_status))
@@ -166,6 +173,8 @@ def main():
                     "epoch": _epoch+1,
                     "best_acc1":best_acc1
                     }
+            if lr_scheduler is not None:
+                ckpt["lr_scheduler"] = lr_scheduler.state_dict()
             rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
             logger.save_log()
 
