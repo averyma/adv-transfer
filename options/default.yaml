@@ -15,9 +15,9 @@ batch_size: 128
 seed: 0
 epoch: 200 
 
-warmup: True
-warmup_multiplier: 1
-warmup_epoch: 1
+lr_warmup_type: 'linear'
+lr_warmup_decay: 0.01
+lr_warmup_epoch: 1
 
 # checkpoint
 ckpt_freq: 20
@@ -25,7 +25,4 @@ ckpt_freq: 20
 # wandb flag
 enable_wandb: false
 
-op_name: 'Identity'
-op_prob: 1.
-op_magnitude: 1
 print_freq: 100
