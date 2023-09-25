@@ -20,7 +20,8 @@ from vit_pytorch.vit_for_small_dataset import ViT
 from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
 from torch.autograd import grad
-from warmup_scheduler import GradualWarmupScheduler
+# from warmup_scheduler import GradualWarmupScheduler
+from typing import List, Optional, Tuple
 
 def seed_everything(manual_seed):
     # set benchmark to False for EXACT reproducibility
@@ -104,13 +105,6 @@ def get_optim(parameters, args):
     else:
         raise ValueError('invalid lr_schduler=%s' % args.lr_scheduler_type)
 
-    # if args.warmup:
-        # lr_scheduler = GradualWarmupScheduler(
-            # opt,
-            # multiplier=args.warmup_multiplier,
-            # total_epoch=args.warmup_epoch,
-            # after_scheduler=lr_scheduler
-        # )
     if args.lr_warmup_epoch > 0:
         if args.lr_warmup_type == 'linear':
             warmup_lr_scheduler = optim.lr_scheduler.LinearLR(
