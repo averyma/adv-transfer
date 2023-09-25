@@ -310,12 +310,14 @@ def main_worker(gpu, ngpus_per_node, args):
             logger.add_scalar("test/best_top1_acc", best_acc1, _epoch)
             logging.info(
                 "Epoch: [{0}]\t"
+                "lr: {lr:.6f}\t"
                 "Train Loss: {loss:.6f}\t"
                 "Train Accuracy(top1): {train_acc1:.2f}\t"
                 "Train Accuracy(top5): {train_acc5:.2f}\t"
                 "Test Accuracy(top1): {test_acc1:.2f}\t"
                 "Test Accuracy(top5): {test_acc5:.2f}\t".format(
                     _epoch,
+                    lr=opt.param_groups[0]['lr'],
                     loss=loss,
                     train_acc1=train_acc1,
                     train_acc5=train_acc5,
