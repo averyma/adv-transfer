@@ -32,12 +32,10 @@ def parse_args():
 
     parser.add_argument("--lr_warmup_type",
     			default=argparse.SUPPRESS)
-    parser.add_argument("--lr_warmup_multiplier",
-    			default=argparse.SUPPRESS, type=float)
     parser.add_argument("--lr_warmup_epoch",
     			default=argparse.SUPPRESS, type=int)
     parser.add_argument("--lr_warmup_decay",
-    			default=argparse.SUPPRESS, type=int)
+    			default=argparse.SUPPRESS, type=float)
 
     parser.add_argument("--batch_size",
     			default=argparse.SUPPRESS, type=int)
