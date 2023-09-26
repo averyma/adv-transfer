@@ -118,10 +118,11 @@ def parse_args():
                         # help="decay factor for Exponential Moving Average of model parameters (default: 0.99998)")
 
 
-
     # model alignment/misalignment
     parser.add_argument("--source_model",
                         default=argparse.SUPPRESS)
+    parser.add_argument("--modified_source_model",
+    			default=None, type=str)
     parser.add_argument("--target_model",
                         default=argparse.SUPPRESS)
     parser.add_argument("--source_arch",
