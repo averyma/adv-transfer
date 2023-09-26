@@ -63,7 +63,20 @@ def get_model(args, device=None):
         else:
             raise NotImplementedError("model not included")
     else:
-        model = torchvision.models.get_model(args.arch)
+        if args.arch == 'simplevit':
+            from vit_pytorch import SimpleViT
+
+            model = SimpleViT(
+                    image_size = 256,
+                    patch_size = 32,
+                    num_classes = 1000,
+                    dim = 1024,
+                    depth = 6,
+                    heads = 16,
+                    mlp_dim = 2048
+            )
+        else:
+            model = torchvision.models.get_model(args.arch)
 
     # if args.pretrain:
         # model.load_state_dict(torch.load(args.pretrain, map_location=device))
