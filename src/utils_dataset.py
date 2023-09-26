@@ -14,13 +14,19 @@ import math
 
 from src.utils_augmentation import CustomAugment
 from src.sampler import RASampler
+from torchvision.transforms.functional import InterpolationMode
 # from data.Caltech101.caltech_dataset import Caltech
 # from sklearn.model_selection import train_test_split
 # from torch.utils.data import Subset
 
 data_dir = '/scratch/ssd001/home/ama/workspace/data/'
 
-def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_augment=False, ra_sampler=False):
+def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_augment=None, ra_magnitude=9, interpolation='bilinear', ra_sampler=False, ra_reps=3, random_erase_prob=0.0, augmix_severity=3):
+
+    if interpolation == 'bilinear':
+        _interpolation = InterpolationMode.BILINEAR
+    elif interpolation == 'bicubic':
+        _interpolation = InterpolationMode.BICUBIC
 
     # default augmentation
     if dataset.startswith('cifar') or dataset == 'svhn':
@@ -36,8 +42,6 @@ def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_aug
 
         transform_list = [transforms.RandomCrop(32, padding=2),
                           transforms.RandomHorizontalFlip()]
-        if auto_augment:
-            transform_list.append(transforms.AutoAugment())
         transform_list.append(transforms.ToTensor())
         transform_list.append(transforms.Normalize(mean, std))
 
@@ -49,17 +53,37 @@ def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_aug
         # detail: https://discuss.pytorch.org/t/normalization-in-the-mnist-example/457/7
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
-        transform_list = [transforms.RandomResizedCrop(224, scale=(0.08, 1.0), interpolation=Image.BICUBIC),
+        transform_list = [transforms.RandomResizedCrop(224, scale=(0.08, 1.0), interpolation=_interpolation),
                           transforms.RandomHorizontalFlip()]
-        if auto_augment:
-            transform_list.append(transforms.AutoAugment())
-        transform_list.append(transforms.ToTensor())
-        transform_list.append(transforms.Normalize(mean, std))
+        if auto_augment is not None:
+            if auto_augment == 'ra':
+                transform_list.append(transforms.RandAugment(
+                    interpolation=_interpolation,
+                    magnitude=ra_magnitude))
+            elif auto_augment == 'ta_wide':
+                transform_list.append(transforms.TrivialAugmentWide(
+                    interpolation=_interpolation))
+            elif auto_augment == 'augmix':
+                transform_list.append(transforms.AugMix(
+                    interpolation=_interpolation,
+                    severity=augmix_severity))
+            else:
+                aa_policy = transforms.AutoAugmentPolicy('imagenet')
+                transform_list.append(transforms.AutoAugment(
+                    policy=aa_policy,
+                    interpolation=_interpolation))
+
+        transform_list.extend([
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean, std)])
+
+        if random_erase_prob > 0:
+            transform_list.append(transforms.RandomErasing(p=random_erase_prob))
 
         transform_train = transforms.Compose(transform_list)
 
         transform_test = transforms.Compose([
-            transforms.Resize(256, interpolation=Image.BICUBIC),
+            transforms.Resize(256, interpolation=_interpolation),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(mean, std)
@@ -77,8 +101,8 @@ def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_aug
         data_train = datasets.CIFAR100(data_dir, train=True, download=True, transform=transform_train)
         data_test = datasets.CIFAR100(data_dir, train=False, download=True, transform=transform_test)
     elif dataset == 'svhn':
-        data_train = datasets.SVHN(data_dir+"SVHN", split='train', download = True, transform=transform_train)
-        data_test = datasets.SVHN(data_dir+"SVHN", split='test', download = True, transform=transform_test)
+        data_train = datasets.SVHN(data_dir+"SVHN", split='train', download=True, transform=transform_train)
+        data_test = datasets.SVHN(data_dir+"SVHN", split='test', download=True, transform=transform_test)
     elif dataset == 'dummy':
         data_train = datasets.FakeData(5000, (3, 224, 224), 1000, transforms.ToTensor())
         data_test = datasets.FakeData(1000, (3, 224, 224), 1000, transforms.ToTensor())
@@ -86,12 +110,12 @@ def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_aug
         dataroot = '/scratch/ssd002/datasets/imagenet'
         traindir = os.path.join(dataroot, 'train')
         valdir = os.path.join(dataroot, 'val')
-        data_train = datasets.ImageFolder(traindir,transform_train)
-        data_test = datasets.ImageFolder(valdir,transform_test)
+        data_train = datasets.ImageFolder(traindir, transform_train)
+        data_test = datasets.ImageFolder(valdir, transform_test)
 
     if distributed:
         if ra_sampler:
-            train_sampler = RASampler(data_train, shuffle=True, repetitions=3)
+            train_sampler = RASampler(data_train, shuffle=True, repetitions=ra_reps)
         else:
             train_sampler = torch.utils.data.distributed.DistributedSampler(data_train)
         val_sampler = torch.utils.data.distributed.DistributedSampler(data_test, shuffle=False, drop_last=True)
