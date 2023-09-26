@@ -259,7 +259,12 @@ def main_worker(gpu, ngpus_per_node, args):
                 args.workers,
                 args.distributed,
                 args.auto_augment,
-                args.ra_sampler
+                args.ra_magnitude,
+                args.interpolation,
+                args.ra_sampler,
+                args.ra_reps,
+                args.random_erase,
+                args.augmix_severity
                 )
 
     if args.dataset == 'imagenet':
