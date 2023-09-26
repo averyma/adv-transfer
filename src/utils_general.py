@@ -67,8 +67,8 @@ def get_model(args, device=None):
             from vit_pytorch import SimpleViT
 
             model = SimpleViT(
-                    image_size = 256,
-                    patch_size = 32,
+                    image_size = 224,
+                    patch_size = 16,
                     num_classes = 1000,
                     dim = 1024,
                     depth = 6,
