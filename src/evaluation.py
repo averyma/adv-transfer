@@ -9,6 +9,7 @@ import numpy as np
 from src.utils_log import Summary, AverageMeter, ProgressMeter
 import time
 from torch.utils.data import Subset
+import torchattacks
 
 CORRUPTIONS_CIFAR10=['brightness',
                      'gaussian_noise',
@@ -485,18 +486,33 @@ def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
 
 def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
     if whitebox:
-        param = {'ord': np.inf,
-              'epsilon': args.pgd_eps,
-              'alpha': args.pgd_alpha,
-              'num_iter': args.pgd_itr,
-              'restarts': 1,
-              'rand_init': True,
-              'clip': True,
-              'loss_fn': nn.CrossEntropyLoss(),
-              'dataset': args.dataset}
-        param['num_iter'] = 1 if args.debug else args.pgd_itr
-        attacker = pgd(**param)
-
+        if args.dataset == 'imagenet':
+            mean = [0.485, 0.456, 0.406]
+            std = [0.229, 0.224, 0.225]
+        elif args.dataset == 'cifar10':
+            mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+            std = [x / 255 for x in [63.0, 62.1, 66.7]]
+        elif args.dataset == 'cifar100':
+            mean = [x / 255 for x in [129.3, 124.1, 112.4]]
+            std = [x / 255 for x in [68.2, 65.4, 70.4]]
+        # param = {'ord': np.inf,
+              # 'epsilon': args.pgd_eps,
+              # 'alpha': args.pgd_alpha,
+              # 'num_iter': args.pgd_itr,
+              # 'restarts': 1,
+              # 'rand_init': True,
+              # 'clip': True,
+              # 'loss_fn': nn.CrossEntropyLoss(),
+              # 'dataset': args.dataset}
+        # param['num_iter'] = 1 if args.debug else args.pgd_itr
+        # attacker = pgd(**param)
+        atk = torchattacks.PGD(
+            model,
+            eps=args.pgd_eps,
+            alpha=args.pgd_alpha,
+            steps=1 if args.debug else args.pgd_itr,
+            random_start=True)
+        atk.set_normalization_used(mean=mean, std=std)
 
     def run_validate(loader, base_progress=0):
         end = time.time()
@@ -512,7 +528,8 @@ def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
 
             if whitebox:
                 with ctx_noparamgrad_and_eval(model):
-                    delta = attacker.generate(model, images, target)
+                    # delta = attacker.generate(model, images, target)
+                    delta = atk(images, target) - images
             else:
                 delta = 0
 
@@ -660,18 +677,43 @@ def eval_transfer_bi_direction(val_loader, model_a, model_b, args, is_main_task)
     return top1_a2b.avg, top1_b2a.avg
 
 def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is_main_task):
-    param = {'ord': np.inf,
-             'epsilon': args.pgd_eps,
-             'alpha': args.pgd_alpha,
-             'num_iter': args.pgd_itr,
-             'restarts': 1,
-             'rand_init': True,
-             'clip': True,
-             'loss_fn': nn.CrossEntropyLoss(),
-             'dataset': args.dataset}
-    param['num_iter'] = 1 if args.debug else args.pgd_itr
-    attacker = pgd(**param)
-    
+    if args.dataset == 'imagenet':
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+    elif args.dataset == 'cifar10':
+        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+        std = [x / 255 for x in [63.0, 62.1, 66.7]]
+    elif args.dataset == 'cifar100':
+        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
+        std = [x / 255 for x in [68.2, 65.4, 70.4]]
+
+    # param = {'ord': np.inf,
+             # 'epsilon': args.pgd_eps,
+             # 'alpha': args.pgd_alpha,
+             # 'num_iter': args.pgd_itr,
+             # 'restarts': 1,
+             # 'rand_init': True,
+             # 'clip': True,
+             # 'loss_fn': nn.CrossEntropyLoss(),
+             # 'dataset': args.dataset}
+    # param['num_iter'] = 1 if args.debug else args.pgd_itr
+    # attacker = pgd(**param)
+    atk_a = torchattacks.PGD(
+        model_a,
+        eps=args.pgd_eps,
+        alpha=args.pgd_alpha,
+        steps=1 if args.debug else args.pgd_itr,
+        random_start=True)
+    atk_a.set_normalization_used(mean=mean, std=std)
+
+    atk_b = torchattacks.PGD(
+        model_b,
+        eps=args.pgd_eps,
+        alpha=args.pgd_alpha,
+        steps=1 if args.debug else args.pgd_itr,
+        random_start=True)
+    atk_b.set_normalization_used(mean=mean, std=std)
+
     num_eval = 1000 if args.dataset == 'imagenet' else 10000
     num_eval = 100 if args.debug else num_eval
 
@@ -686,10 +728,12 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
             target = target.cuda(args.gpu, non_blocking=True)
 
         with ctx_noparamgrad_and_eval(model_a):
-            delta_a = attacker.generate(model_a, images, target)
+            # delta_a = attacker.generate(model_a, images, target)
+            delta_a = atk_a(images, target) - images
 
         with ctx_noparamgrad_and_eval(model_b):
-            delta_b = attacker.generate(model_b, images, target)
+            # delta_b = attacker.generate(model_b, images, target)
+            delta_b = atk_b(images, target) - images
 
         # compute output
         with torch.no_grad():
