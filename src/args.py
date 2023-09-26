@@ -103,9 +103,21 @@ def parse_args():
     parser.add_argument('--clip_grad_norm',
                         default=None, type=float)
     parser.add_argument('--auto_augment',
-                        default=False, type=distutils.util.strtobool)
+                        default=None, type=str)
+    parser.add_argument('--ra_magnitude',
+                        default=9, type=int)
+    parser.add_argument('--interpolation',
+                        default='bilinear', type=str)
+    parser.add_argument('--augmix_severity',
+                        default=3, type=int)
+    parser.add_argument('--random_erase',
+                        default=0.0, type=float)
+
     parser.add_argument('--ra_sampler',
                         default=False, type=distutils.util.strtobool)
+    parser.add_argument("--ra_reps",
+                        default=3, type=int,
+                        help="number of repetitions for Repeated Augmentation (default: 3)")
     parser.add_argument('--use-v2',
                         action="store_true")
     # parser.add_argument("--model_ema", action="store_true",
