@@ -75,6 +75,9 @@ def get_model(args, device=None):
                     heads = 16,
                     mlp_dim = 2048
             )
+        elif args.arch == 'inception_v3':
+            import timm
+            model = timm.create_model('inception_v3', pretrained=False)
         else:
             model = torchvision.models.get_model(args.arch)
 
