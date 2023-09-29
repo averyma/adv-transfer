@@ -22,6 +22,7 @@ from torchvision import datasets, transforms
 from torch.autograd import grad
 # from warmup_scheduler import GradualWarmupScheduler
 from typing import List, Optional, Tuple
+import timm
 
 def seed_everything(manual_seed):
     # set benchmark to False for EXACT reproducibility
@@ -76,8 +77,14 @@ def get_model(args, device=None):
                     mlp_dim = 2048
             )
         elif args.arch == 'inception_v3':
-            import timm
             model = timm.create_model('inception_v3', pretrained=False)
+        elif args.arch.startswith('vit'):
+            if args.arch == 'vit_t_16':
+                model = timm.create_model('vit_tiny_patch16_224', pretrained=False)
+            elif args.arch == 'vit_s_16':
+                model = timm.create_model('vit_small_patch16_224', pretrained=False)
+            elif args.arch == 'vit_b_16':
+                model = timm.create_model('vit_base_patch16_224', pretrained=False)
         else:
             model = torchvision.models.get_model(args.arch)
 
