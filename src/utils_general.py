@@ -85,6 +85,10 @@ def get_model(args, device=None):
                 model = timm.create_model('vit_small_patch16_224', pretrained=False)
             elif args.arch == 'vit_b_16':
                 model = timm.create_model('vit_base_patch16_224', pretrained=False)
+        elif args.arch == 'swin_s':
+            model = timm.create_model('swin_small_patch4_window7_224', pretrained=False)
+        elif args.arch == 'swin_b':
+            model = timm.create_model('swin_base_patch4_window7_224', pretrained=False)
         else:
             model = torchvision.models.get_model(args.arch)
 
