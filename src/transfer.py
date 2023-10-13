@@ -376,7 +376,7 @@ def model_align(train_loader, source_model, witness_model, optimizer, device, ar
 
     return top1.avg, top5.avg, losses.avg
 
-def model_align_feature_space(train_loader, module_list, criterion_list, optimizer, epoch, device, args, is_main_task):
+def model_align_feature_space(train_loader, module_list, criterion_list, optimizer, lr_scheduler, epoch, device, args, is_main_task):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -502,6 +502,8 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if lr_scheduler is not None:
+            lr_scheduler.step((i+1)/len(train_loader))
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(p_s, target, topk=(1, 5))
