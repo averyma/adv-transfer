@@ -32,24 +32,31 @@ from src.evaluation import validate, eval_transfer, eval_transfer_bi_direction, 
 from src.transfer import model_align, model_align_feature_space
 from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss, SymmetricKL
 
-root_dir = '/scratch/hdd001/home/ama/improve-transferability/'
+root_dir = '/scratch/ssd001/home/ama/workspace/adv-transfer/ckpt/'
 model_ckpt = {
-        'cifar10': {
-            'preactresnet18': '2023-07-19/cifar10/cosine/20230719-cifar10-preactresnet18-0.1-4',
-            'preactresnet50': '2023-07-21/cifar10/cosine/20230721-cifar10-preactresnet50-0.1-4',
-            'vgg19': '2023-07-27/20230727-cifar10-vgg19-0.1-4',
-            'vit_small': '2023-08-02/20230802-cifar10-vit_small-0.1-4'
-            },
-        'cifar100': {
-            'preactresnet18': '2023-07-19/cifar100/cosine/20230719-cifar100-preactresnet18-0.1-4',
-            'preactresnet50': '2023-07-21/cifar100/cosine/20230721-cifar100-preactresnet50-0.1-4',
-            'vgg19': '2023-07-27/20230727-cifar100-vgg19-0.1-4',
-            'vit_small': '2023-08-02/20230802-cifar100-vit_small-0.1-4'
-            },
+        # 'cifar10': {
+            # 'preactresnet18': '2023-07-19/cifar10/cosine/20230719-cifar10-preactresnet18-0.1-4',
+            # 'preactresnet50': '2023-07-21/cifar10/cosine/20230721-cifar10-preactresnet50-0.1-4',
+            # 'vgg19': '2023-07-27/20230727-cifar10-vgg19-0.1-4',
+            # 'vit_small': '2023-08-02/20230802-cifar10-vit_small-0.1-4'
+            # },
+        # 'cifar100': {
+            # 'preactresnet18': '2023-07-19/cifar100/cosine/20230719-cifar100-preactresnet18-0.1-4',
+            # 'preactresnet50': '2023-07-21/cifar100/cosine/20230721-cifar100-preactresnet50-0.1-4',
+            # 'vgg19': '2023-07-27/20230727-cifar100-vgg19-0.1-4',
+            # 'vit_small': '2023-08-02/20230802-cifar100-vit_small-0.1-4'
+            # },
         'imagenet': {
-            'resnet18': '2023-07-26/20230726-imagenet-resnet18-256-4',
-            'resnet50': '2023-07-26/20230726-imagenet-resnet50-256-4',
-            'vgg19_bn': '2023-08-10/20230810-4gpu-rtx6000-imagenet-vgg19_bn-256-4',
+            'resnet18': '20230726-imagenet-resnet18-256-4',
+            'resnet50': '20230726-imagenet-resnet50-256-4',
+            'resnet101': '20230928-4gpu-rtx6000,t4v2-imagenet-resnet101-256-4',
+            'vgg19_bn': '20230810-4gpu-rtx6000-imagenet-vgg19_bn-256-4',
+            'densenet121': '20230928-4gpu-rtx6000,t4v2-imagenet-densenet121-256-4',
+            'inception_v3': '20230928-4gpu-rtx6000,t4v2-imagenet-inception_v3-256-4',
+            'swin_t': '20230926-8gpu-t4v2-imagenet-swin_t-1024-4',
+            'vit_t_16': '20230929-8gpu-t4v2-imagenet-vit_t_16-1024-4',
+            'vit_s_16': '20230929-8gpu-t4v2-imagenet-vit_s_16-1024-4',
+            'vit_b_16': '20231010-8gpu-t4v2-imagenet-vit_b_16-1024-4',
             }
         }
 
@@ -95,6 +102,7 @@ def main():
 def main_worker(gpu, ngpus_per_node, args):
 
     args.ngpus_per_node = ngpus_per_node
+    args.ncpus_per_node = len(os.sched_getaffinity(0))
     args.gpu = gpu
     device = torch.device('cuda:{}'.format(args.gpu))
 
@@ -125,11 +133,23 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.dataset.startswith('cifar'):
         list_target_arch = ['preactresnet18', 'preactresnet50', 'vgg19', 'vit_small']
     else:
-        list_target_arch = ['resnet18', 'resnet50', 'vgg19_bn']
+        list_target_arch = ['resnet18', 'resnet50', 'resnet101',
+                            'densenet121', 'inception_v3', 'vgg19_bn',
+                            'swin_t', 'vit_t_16', 'vit_s_16', 'vit_b_16']
+
+    if args.seed == 0:
+        source_idx, witness_idx, target_idx = 0, 1, 2
+    elif args.seed == 1:
+        source_idx, witness_idx, target_idx = 1, 2, 0
+    elif args.seed == 2:
+        source_idx, witness_idx, target_idx = 2, 0, 1
 
     args.arch = args.source_arch
     source_model = get_model(args)
-    source_model_dir = root_dir + model_ckpt[args.dataset][args.source_arch] + '0/model/best_model.pt'
+    source_model_dir = os.path.join(
+        root_dir, args.dataset, args.source_arch,
+        model_ckpt[args.dataset][args.source_arch]+str(source_idx), 'model/best_model.pt'
+        )
     ckpt = torch.load(source_model_dir, map_location=device)
     try:
         source_model.load_state_dict(ckpt)
@@ -140,7 +160,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
     args.arch = args.witness_arch
     witness_model = get_model(args)
-    witness_model_dir = root_dir + model_ckpt[args.dataset][args.witness_arch] + '2/model/best_model.pt'
+    witness_model_dir = os.path.join(
+        root_dir, args.dataset, args.witness_arch,
+        model_ckpt[args.dataset][args.witness_arch]+str(witness_idx), 'model/best_model.pt'
+        )
     ckpt = torch.load(witness_model_dir, map_location=device)
     try:
         witness_model.load_state_dict(ckpt)
@@ -155,7 +178,6 @@ def main_worker(gpu, ngpus_per_node, args):
             args.project_source_embedding = args.always_proj
     else:
         args.project_source_embedding = False
-
 
     if args.project_source_embedding:
         from models import LinearProjection
@@ -222,10 +244,11 @@ def main_worker(gpu, ngpus_per_node, args):
         # When using a single GPU per process and per
         # DistributedDataParallel, we need to divide the batch size
         # ourselves based on the total number of GPUs of the current node.
-        args.batch_size = int(args.batch_size / ngpus_per_node)
-        # args.workers = mp.cpu_count()//max(ngpus_per_node, 1)
-        args.workers = 4
-        print("GPU: {}, batch_size: {}, workers: {}".format(args.gpu, args.batch_size, args.workers))
+        args.batch_size = int(args.batch_size / args.ngpus_per_node)
+        # args.workers = args.ncpus_per_node//max(args.ngpus_per_node, 1)
+        # args.workers = 2
+        args.workers = 0
+        print("GPU: {}, batch_size: {}, ncpus_per_node: {}, ngpus_per_node: {}, workers: {}".format(args.gpu, args.batch_size, args.ncpus_per_node, args.ngpus_per_node, args.workers))
         source_model = torch.nn.parallel.DistributedDataParallel(source_model, device_ids=[args.gpu])
         orig_source_model = torch.nn.parallel.DistributedDataParallel(orig_source_model, device_ids=[args.gpu])
         witness_model = torch.nn.parallel.DistributedDataParallel(witness_model, device_ids=[args.gpu])
@@ -315,7 +338,10 @@ def main_worker(gpu, ngpus_per_node, args):
         module_list.append(source_projection)
         trainable_list.append(source_projection)
 
-    opt, _ = get_optim(trainable_list.parameters(), args)
+    opt, lr_scheduler = get_optim(trainable_list.parameters(), args)
+    scaler = torch.cuda.amp.GradScaler() if args.amp else None
+    if is_main_task:
+        print('{}: agrs.amp: {}, scaler: {}'.format(device, args.amp, scaler))
 
     if args.distributed:
         dist.barrier()
@@ -348,6 +374,7 @@ def main_worker(gpu, ngpus_per_node, args):
         test_loader_1k = load_imagenet_test_1k(
                     batch_size=32,
                     workers=0,
+                    # workers=args.workers,
                     distributed=args.distributed
                     )
         # test_loader_shuffle is contains the same number of data as the original
@@ -355,6 +382,7 @@ def main_worker(gpu, ngpus_per_node, args):
         test_loader_shuffle, val_sampler = load_imagenet_test_shuffle(
                     batch_size=32,
                     workers=0,
+                    # workers=args.workers,
                     distributed=args.distributed
                     )
     else:
@@ -380,31 +408,45 @@ def main_worker(gpu, ngpus_per_node, args):
 ##########################################################
     if args.distributed:
         dist.barrier()
-    for _epoch in range(ckpt_epoch, args.epoch+1):
-        if args.distributed:
-            train_sampler.set_epoch(_epoch)
-        train_acc1, train_acc5, loss, loss_history = model_align_feature_space(
-                                                                train_loader,
-                                                                module_list,
-                                                                criterion_list,
-                                                                opt,
-                                                                _epoch,
-                                                                device,
-                                                                args,
-                                                                is_main_task)
-        # checkpointing for preemption
-        if is_main_task:
-            result['loss'] = loss_history[0] if _epoch == 1 else np.concatenate((result['loss'], loss_history[0]))
-            result['loss_cls'] = loss_history[1] if _epoch == 1 else np.concatenate((result['loss_cls'], loss_history[1]))
-            result['loss_kd'] = loss_history[2] if _epoch == 1 else np.concatenate((result['loss_kd'], loss_history[2]))
-            ckpt = {"state_dict": module_list[0].state_dict(), 'result': result, 'ckpt_epoch': _epoch+1}
-            if args.project_source_embedding:
-                ckpt['projection'] = module_list[2].state_dict()
-            rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
-            logger.save_log()
 
+    if args.modified_source_model is None:
+        for _epoch in range(ckpt_epoch, args.epoch+1):
+            if args.distributed:
+                train_sampler.set_epoch(_epoch)
+            train_acc1, train_acc5, loss, loss_history = model_align_feature_space(
+                                                                    train_loader,
+                                                                    module_list,
+                                                                    criterion_list,
+                                                                    opt,
+                                                                    lr_scheduler,
+                                                                    scaler,
+                                                                    _epoch,
+                                                                    device,
+                                                                    args,
+                                                                    is_main_task)
+            # checkpointing for preemption
+            if is_main_task:
+                result['loss'] = loss_history[0] if _epoch == 1 else np.concatenate((result['loss'], loss_history[0]))
+                result['loss_cls'] = loss_history[1] if _epoch == 1 else np.concatenate((result['loss_cls'], loss_history[1]))
+                result['loss_kd'] = loss_history[2] if _epoch == 1 else np.concatenate((result['loss_kd'], loss_history[2]))
+                ckpt = {"state_dict": module_list[0].state_dict(), 'result': result, 'ckpt_epoch': _epoch+1}
+                if args.project_source_embedding:
+                    ckpt['projection'] = module_list[2].state_dict()
+                rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
+                logger.save_log()
+
+            if args.distributed:
+                dist.barrier()
+    else:
+        ckpt = torch.load(args.modified_source_model, map_location=device)
+        try:
+            source_model.load_state_dict(ckpt)
+        except RuntimeError:
+            source_model.load_state_dict(remove_module(ckpt))
+        source_model.cuda(args.gpu)
         if args.distributed:
-            dist.barrier()
+            source_model = torch.nn.parallel.DistributedDataParallel(source_model, device_ids=[args.gpu])
+        print('{}: Load modified source model from {}.'.format(device, args.modified_source_model))
     del train_loader
 ##########################################################
 ###################### Training ends #####################
@@ -448,7 +490,10 @@ def main_worker(gpu, ngpus_per_node, args):
             if result[prefix + 'transfer-from-' + target_arch] is None:
                 args.arch = target_arch
                 target_model = get_model(args)
-                target_model_dir = root_dir + model_ckpt[args.dataset][target_arch] + '1/model/best_model.pt'
+                target_model_dir = os.path.join(
+                    root_dir, args.dataset, target_arch,
+                    model_ckpt[args.dataset][target_arch]+str(target_idx), 'model/best_model.pt'
+                    )
                 print('{}: Load target model from {}.'.format(device, target_model_dir))
                 ckpt = torch.load(target_model_dir, map_location=device)
                 try:
