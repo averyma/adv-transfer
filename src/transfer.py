@@ -376,7 +376,7 @@ def model_align(train_loader, source_model, witness_model, optimizer, device, ar
 
     return top1.avg, top5.avg, losses.avg
 
-def model_align_feature_space(train_loader, module_list, criterion_list, optimizer, lr_scheduler, epoch, device, args, is_main_task):
+def model_align_feature_space(train_loader, module_list, criterion_list, optimizer, lr_scheduler, scaler, epoch, device, args, is_main_task):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -500,8 +500,19 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
         loss *= -1 if args.misalign else 1
         # compute gradient and do SGD step
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            if args.clip_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(source_model.parameters(), args.clip_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if args.clip_grad_norm is not None:
+                nn.utils.clip_grad_norm_(source_model.parameters(), args.clip_grad_norm)
+            optimizer.step()
+
         if lr_scheduler is not None:
             lr_scheduler.step((i+1)/len(train_loader))
 
