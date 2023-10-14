@@ -1,4 +1,5 @@
 /data/
+/ckpt/
 /wandb/
 /exp/
 /pretrained/
