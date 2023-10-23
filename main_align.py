@@ -245,9 +245,9 @@ def main_worker(gpu, ngpus_per_node, args):
         # DistributedDataParallel, we need to divide the batch size
         # ourselves based on the total number of GPUs of the current node.
         args.batch_size = int(args.batch_size / args.ngpus_per_node)
-        # args.workers = args.ncpus_per_node//max(args.ngpus_per_node, 1)
+        args.workers = args.ncpus_per_node//max(args.ngpus_per_node, 1)
         # args.workers = 2
-        args.workers = 0
+        # args.workers = 0
         print("GPU: {}, batch_size: {}, ncpus_per_node: {}, ngpus_per_node: {}, workers: {}".format(args.gpu, args.batch_size, args.ncpus_per_node, args.ngpus_per_node, args.workers))
         source_model = torch.nn.parallel.DistributedDataParallel(source_model, device_ids=[args.gpu])
         orig_source_model = torch.nn.parallel.DistributedDataParallel(orig_source_model, device_ids=[args.gpu])
@@ -266,7 +266,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
     print('{}: is_main_task: {}'.format(device, is_main_task))
 
-    ckpt_dir = args.j_dir+"/"+str(args.j_id)+"/"
+    ckpt_dir = os.path.join(args.j_dir, 'ckpt')
+    log_dir = os.path.join(args.j_dir, 'log')
     ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
     ckpt_location_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
 
@@ -448,6 +449,8 @@ def main_worker(gpu, ngpus_per_node, args):
             source_model = torch.nn.parallel.DistributedDataParallel(source_model, device_ids=[args.gpu])
         print('{}: Load modified source model from {}.'.format(device, args.modified_source_model))
     del train_loader
+    del witness_model
+    torch.cuda.empty_cache()
 ##########################################################
 ###################### Training ends #####################
 ##########################################################
