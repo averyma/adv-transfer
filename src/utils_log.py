@@ -32,10 +32,6 @@ def rotateCheckpoint(ckpt_dir, ckpt_name, ckpt):
         saveCheckpoint(ckpt_dir,
                        ckpt_name+"_curr.pth",
                        ckpt)
-                       # model,
-                       # opt,
-                       # epoch,
-                       # best_acc1)
         try:
             torch.load(ckpt_curr)
         except:
@@ -65,19 +61,12 @@ def saveModel(save_path, model_name, model_state_dict):
                 print('Model saved and verified!')
                 load_successfully = True
 
-# def saveCheckpoint(ckpt_dir, ckpt_name, model, opt, epoch, best_acc1):
 def saveCheckpoint(ckpt_dir, ckpt_name, ckpt):
-    # checkpoint_save({
-        # "state_dict": model.state_dict(),
-        # "optimizer": opt.state_dict(),
-        # "epoch": epoch,
-        # "best_acc1":best_acc1
-        # }, ckpt_dir, ckpt_name)
     checkpoint_save(ckpt, ckpt_dir, ckpt_name)
 
-def delCheckpoint(j_dir, j_id):
-    ckpt_curr = os.path.join(j_dir, str(j_id), "ckpt_curr.pth")
-    ckpt_prev = os.path.join(j_dir, str(j_id), "ckpt_prev.pth")
+def delCheckpoint(ckpt_dir):
+    ckpt_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
+    ckpt_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
     for ckpt_path in [ckpt_curr, ckpt_prev]:
         if os.path.isfile(ckpt_path):
             print("ckpt {} is deleted".format(ckpt_path))
@@ -87,11 +76,11 @@ def delCheckpoint(j_dir, j_id):
 class metaLogger(object):
     def __init__(self, args):
         self.log_path = args.j_dir+"/log/"
-        self.ckpt_status = self.get_ckpt_status(args.j_dir, args.j_id)
+        self.ckpt_status = self.get_ckpt_status(args.j_dir)
         self.log_dict = self.load_log(self.log_path)
 
-    def get_ckpt_status(self, j_dir, j_id):
-        ckpt_dir = j_dir+"/"+str(j_id)+"/"
+    def get_ckpt_status(self, j_dir):
+        ckpt_dir = os.path.join(j_dir, 'ckpt')
         ckpt_location_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
         ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
 
@@ -205,7 +194,7 @@ class wandbLogger(object):
         self.wandb_log = wandb.init(name=args.j_dir.split("/")[-1],
                                     project=args.wandb_project,
                                     dir=args.j_dir,
-                                    id=str(args.j_id),
+                                    # id=str(args.j_id),
                                     resume=True,
                                     reinit=True)
         self.wandb_log.config.update(args)

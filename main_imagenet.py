@@ -78,6 +78,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     global best_acc1
     args.ngpus_per_node = ngpus_per_node
+    args.ncpus_per_node = len(os.sched_getaffinity(0))
     args.gpu = gpu
     device = torch.device('cuda:{}'.format(args.gpu))
 
@@ -110,9 +111,9 @@ def main_worker(gpu, ngpus_per_node, args):
         # DistributedDataParallel, we need to divide the batch size
         # ourselves based on the total number of GPUs of the current node.
         args.batch_size = int(args.batch_size / ngpus_per_node)
-        args.workers = mp.cpu_count()//max(ngpus_per_node, 1)
+        args.workers = args.ncpus_per_node//max(args.ngpus_per_node, 1)
         # args.workers = 4
-        print("GPU: {}, batch_size: {}, workers: {}".format(args.gpu, args.batch_size, args.workers))
+        print("GPU: {}, batch_size: {}, ncpus_per_node: {}, ngpus_per_node: {}, workers: {}".format(args.gpu, args.batch_size, args.ncpus_per_node, args.ngpus_per_node, args.workers))
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
     else:
         torch.cuda.set_device(args.gpu)
@@ -135,7 +136,8 @@ def main_worker(gpu, ngpus_per_node, args):
         print('{}: agrs.amp: {}, scaler: {}'.format(device, args.amp, scaler))
     ckpt_epoch = 1
 
-    ckpt_dir = args.j_dir+"/"+str(args.j_id)+"/"
+    ckpt_dir = os.path.join(args.j_dir, 'ckpt')
+    log_dir = os.path.join(args.j_dir, 'log')
     ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
     ckpt_location_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
 
@@ -145,30 +147,27 @@ def main_worker(gpu, ngpus_per_node, args):
     '''
     if is_main_task and args.resume_from_ckpt is not None:
         if not (os.path.exists(ckpt_location_prev) or os.path.exists(ckpt_location_curr)):
+            resume_ckpt_dir = os.path.join(args.resume_from_ckpt, 'ckpt')
             print('Resume from a prev ckpt at {}'.format(args.resume_from_ckpt))
+            resume_log_dir = os.path.join(args.resume_from_ckpt, 'log')
+            print('Also copying log files in {}'.format(resume_log_dir))
 
-            log_dir = args.resume_from_ckpt[:-1] if args.resume_from_ckpt[-1] == '/' else args.resume_from_ckpt
-            while log_dir[-1] != '/':
-                log_dir = log_dir[:-1]
-            log_dir += 'log/'
-            print('Also copying log files in {}'.format(log_dir))
-
-            ckpt_prev_curr = os.path.join(args.resume_from_ckpt, "ckpt_curr.pth")
-            ckpt_prev_prev = os.path.join(args.resume_from_ckpt, "ckpt_prev.pth")
+            ckpt_prev_curr = os.path.join(resume_ckpt_dir, "ckpt_curr.pth")
+            ckpt_prev_prev = os.path.join(resume_ckpt_dir, "ckpt_prev.pth")
 
             # only copying if there is still ckpt in the path spepcified by resume_from_ckpt
             if os.path.isfile(ckpt_prev_curr) or os.path.isfile(ckpt_prev_prev):
 
-                log_prev_txt = os.path.join(log_dir, "log.txt")
-                log_prev_curr = os.path.join(log_dir, "log_curr.pth")
-                log_prev_prev = os.path.join(log_dir, "log_prev.pth")
+                log_prev_txt = os.path.join(resume_log_dir, "log.txt")
+                log_prev_curr = os.path.join(resume_log_dir, "log_curr.pth")
+                log_prev_prev = os.path.join(resume_log_dir, "log_prev.pth")
 
-                ckpt_curr_curr = os.path.join(args.j_dir, str(args.j_id), "ckpt_curr.pth")
-                ckpt_curr_prev = os.path.join(args.j_dir, str(args.j_id), "ckpt_prev.pth")
+                ckpt_curr_curr = ckpt_location_curr
+                ckpt_curr_prev = ckpt_location_prev
 
-                log_curr_txt = os.path.join(args.j_dir, "log", "log.txt")
-                log_curr_curr = os.path.join(args.j_dir, "log", "log_curr.pth")
-                log_curr_prev = os.path.join(args.j_dir, "log", "log_prev.pth")
+                log_curr_txt = os.path.join(log_dir, "log.txt")
+                log_curr_curr = os.path.join(log_dir, "log_curr.pth")
+                log_curr_prev = os.path.join(log_dir, "log_prev.pth")
 
                 for from_path, to_path in zip(
                         [ckpt_prev_curr, ckpt_prev_prev, log_prev_txt, log_prev_curr, log_prev_prev],
@@ -225,8 +224,6 @@ def main_worker(gpu, ngpus_per_node, args):
         best_acc1 = ckpt['best_acc1']
         if lr_scheduler is not None:
             lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
-            # for _dummy in range(ckpt_epoch-1):
-                # lr_scheduler.step()
         if scaler is not None:
             scaler.load_state_dict(ckpt["scaler"])
         print("{}: CHECKPOINT LOADED!".format(device))
@@ -403,7 +400,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # delete slurm checkpoints
     if is_main_task:
-        delCheckpoint(args.j_dir, args.j_id)
+        delCheckpoint(ckpt_dir)
 
     if args.distributed:
         ddp_cleanup()
