@@ -101,7 +101,7 @@ def parse_args():
     parser.add_argument('--cutmix_alpha',
                         default=0., type=float)
     parser.add_argument('--clip_grad_norm',
-                        default=None, type=float)
+                        default=None)
     parser.add_argument('--auto_augment',
                         default=None, type=str)
     parser.add_argument('--ra_magnitude',
@@ -219,6 +219,10 @@ def get_args():
     # if args.dataset.startswith('cifar'):
         # args_dict = DictWrapper(default)
         # return args_dict
+    if default['clip_grad_norm'] in ['none', 'None']:
+        default['clip_grad_norm'] = None
+    else:
+        default['clip_grad_norm'] = float(default['clip_grad_norm'])
 
     return argparse.Namespace(**default)
 
