@@ -191,13 +191,12 @@ class metaLogger(object):
 class wandbLogger(object):
     def __init__(self, args):
         self.log_path = args.j_dir+"/log/"
-        self.wandb_log = wandb.init(name=args.j_dir.split("/")[-1],
-                                    project=args.wandb_project,
+        self.wandb_log = wandb.init(name=args.j_dir.split("/")[-1], project=args.wandb_project,
                                     dir=args.j_dir,
                                     # id=str(args.j_id),
                                     resume=True,
                                     reinit=True)
-        self.wandb_log.config.update(args)
+        self.wandb_log.config.update(args, allow_val_change=True)
 
     def upload(self, logger, epoch):
         all_keys = [*logger.log_dict.keys()]
