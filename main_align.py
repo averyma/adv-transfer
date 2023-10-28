@@ -188,6 +188,8 @@ def main_worker(gpu, ngpus_per_node, args):
             dim_emb_source = 2048
         elif args.source_arch in 'vgg19_bn':
             dim_emb_source = 25088
+        elif args.source_arch == 'vit_b_16':
+            dim_emb_source = 768
 
         if args.witness_arch in ['resnet18', 'preactresnet18', 'vgg19', 'vit_small']:
             dim_emb_witness = 512
@@ -195,6 +197,8 @@ def main_worker(gpu, ngpus_per_node, args):
             dim_emb_witness = 2048
         elif args.witness_arch in 'vgg19_bn':
             dim_emb_witness = 25088
+        elif args.witness_arch == 'vit_t_16':
+            dim_emb_witness = 192
 
         source_projection = LinearProjection(dim_emb_source, dim_emb_witness)
     print('{}: Use linear projection: {}'.format(device, args.project_source_embedding))
@@ -567,8 +571,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 logging.info("{}: {:.2f}\t".format(key, result[key]))
             else:
                 num_align_iteration = len(result['loss'])
-                for i in range(num_align_iteration):
-                    logger.add_scalar(key, result[key][i], i+1)
+                # for i in range(num_align_iteration):
+                    # logger.add_scalar(key, result[key][i], i+1)
 
     if args.distributed:
         dist.barrier()
@@ -578,7 +582,7 @@ def main_worker(gpu, ngpus_per_node, args):
         # if result['diff/avg-transfer-to'] > 0 and result['diff/avg-transfer-from'] < 0:
         if args.save_modified_model:
             print('Saving final model!')
-            saveModel(args.j_dir+"/model/", "final_model", model.state_dict())
+            saveModel(args.j_dir+"/model/", "final_model", source_model.state_dict())
         if args.enable_wandb:
             save_wandb_retry = 0
             save_wandb_successful = False
@@ -604,7 +608,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # delete slurm checkpoints
     if is_main_task:
-        delCheckpoint(args.j_dir, args.j_id)
+        delCheckpoint(ckpt_dir)
 
     if args.distributed:
         ddp_cleanup()
