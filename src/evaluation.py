@@ -819,3 +819,214 @@ def eval_transfer_bi_direction_two_metric(val_loader, model_a, model_b, args, is
 
     return top1_a2b.avg, top1_b2a.avg, top1_a2b_NS.avg, top1_b2a_NS.avg
 
+def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_main_task):
+    if args.dataset == 'imagenet':
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+    elif args.dataset == 'cifar10':
+        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+        std = [x / 255 for x in [63.0, 62.1, 66.7]]
+    elif args.dataset == 'cifar100':
+        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
+        std = [x / 255 for x in [68.2, 65.4, 70.4]]
+
+    if args.debug:
+        steps = 1
+        eps = 4/255
+        alpha = 1/255
+        num_eval = 100
+
+    else:
+        if atk_method.endswith('strong'):
+            steps = 40
+            eps = 8/255
+            alpha = 2/255
+        else:
+            steps = 20
+            eps = 4/255
+            alpha = 1/255
+        num_eval = 1000
+
+    if atk_method.startswith('pgd'):
+
+        atk_a = torchattacks.PGD(
+            model_a,
+            eps=eps,
+            alpha=alpha,
+            steps=steps,
+            random_start=True)
+
+        atk_b = torchattacks.PGD(
+            model_b,
+            eps=eps,
+            alpha=alpha,
+            steps=steps,
+            random_start=True)
+    elif atk_method.startswith('mi'):
+        atk_a = torchattacks.MIFGSM(
+            model_a,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+
+        atk_b = torchattacks.MIFGSM(
+            model_b,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+    elif atk_method.startswith('ni'):
+        atk_a = torchattacks.NIFGSM(
+            model_a,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+
+        atk_b = torchattacks.NIFGSM(
+            model_b,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+    elif atk_method.startswith('vni'):
+        atk_a = torchattacks.VNIFGSM(
+            model_a,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+
+        atk_b = torchattacks.VNIFGSM(
+            model_b,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+    elif atk_method.startswith('vmi'):
+        atk_a = torchattacks.VMIFGSM(
+            model_a,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+
+        atk_b = torchattacks.VMIFGSM(
+            model_b,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+    elif atk_method.startswith('sini'):
+        atk_a = torchattacks.SINIFGSM(
+            model_a,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+
+        atk_b = torchattacks.SINIFGSM(
+            model_b,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+    elif atk_method.startswith('ti'):
+        atk_a = torchattacks.TIFGSM(
+            model_a,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+
+        atk_b = torchattacks.TIFGSM(
+            model_b,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+    elif atk_method.startswith('di'):
+        atk_a = torchattacks.DIFGSM(
+            model_a,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+
+        atk_b = torchattacks.DIFGSM(
+            model_b,
+            eps=eps,
+            alpha=alpha,
+            steps=steps)
+
+    atk_a.set_normalization_used(mean=mean, std=std)
+    atk_b.set_normalization_used(mean=mean, std=std)
+
+    def run_validate_one_iteration(images, target):
+        end = time.time()
+        if args.gpu is not None and torch.cuda.is_available():
+            images = images.cuda(args.gpu, non_blocking=True)
+        if torch.backends.mps.is_available():
+            images = images.to('mps')
+            target = target.to('mps')
+        if torch.cuda.is_available():
+            target = target.cuda(args.gpu, non_blocking=True)
+
+        with ctx_noparamgrad_and_eval(model_a):
+            delta_a = atk_a(images, target) - images
+
+        with ctx_noparamgrad_and_eval(model_b):
+            delta_b = atk_b(images, target) - images
+
+        # compute output
+        with torch.no_grad():
+            p_a = model_a(images)
+            p_b = model_b(images)
+            p_adv_a = model_a(images+delta_a)
+            p_adv_b = model_b(images+delta_b)
+            qualified = return_qualified(p_a, p_b, p_adv_a, p_adv_b, target)
+
+        # measure accuracy and record loss
+        num_qualified = qualified.sum().item()
+        p_b2a = model_a((images+delta_b)[qualified, ::])
+        p_a2b = model_b((images+delta_a)[qualified, ::])
+
+        acc1_b2a, acc5_b2a = accuracy(p_b2a, target[qualified], topk=(1, 5))
+        acc1_a2b, acc5_a2b = accuracy(p_a2b, target[qualified], topk=(1, 5))
+
+        top1_b2a.update(acc1_b2a[0], num_qualified)
+        top5_b2a.update(acc5_b2a[0], num_qualified)
+        top1_a2b.update(acc1_a2b[0], num_qualified)
+        top5_a2b.update(acc5_a2b[0], num_qualified)
+        total_qualified.update(num_qualified)
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
+    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top1_a2b = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    top5_a2b = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
+    progress = ProgressMeter(
+        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        [batch_time, top1_a2b, top1_b2a, total_qualified],
+        prefix='Transfer: ')
+
+    # switch to evaluate mode
+    model_a.eval()
+    model_b.eval()
+
+    for i, (images, target) in enumerate(val_loader):
+        run_validate_one_iteration(images, target)
+
+        if (i % args.print_freq == 0 and is_main_task) or args.debug:
+            progress.display(i + 1)
+
+        if args.distributed:
+            total_qualified.all_reduce()
+
+        if total_qualified.sum > (num_eval/args.ngpus_per_node):
+            break
+
+    if args.distributed:
+        top1_b2a.all_reduce()
+        top1_a2b.all_reduce()
+        top5_b2a.all_reduce()
+        top5_a2b.all_reduce()
+
+    if is_main_task:
+        progress.display_summary()
+
+    return top1_b2a.avg
+
