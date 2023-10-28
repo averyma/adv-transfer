@@ -219,7 +219,9 @@ def get_args():
     # if args.dataset.startswith('cifar'):
         # args_dict = DictWrapper(default)
         # return args_dict
-    if default['clip_grad_norm'] in ['none', 'None']:
+    if default['clip_grad_norm'] == None:
+        pass
+    elif default['clip_grad_norm'] in ['none', 'None']:
         default['clip_grad_norm'] = None
     else:
         default['clip_grad_norm'] = float(default['clip_grad_norm'])
