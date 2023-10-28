@@ -458,8 +458,16 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
                 witness_model_hook = witness_model
 
             if args.dataset == 'imagenet':
-                source_model_hook.avgpool.register_forward_hook(get_features('feat_s'))
-                witness_model_hook.avgpool.register_forward_hook(get_features('feat_w'))
+                if args.source_arch.startswith('vit') or args.source_arch.startswith('swin'):
+                    source_model_hook.head_drop.register_forward_hook(get_features('feat_s'))
+                else:
+                    source_model_hook.avgpool.register_forward_hook(get_features('feat_s'))
+
+                if args.witness_arch.startswith('vit') or args.witness_arch.startswith('swin'):
+                    witness_model_hook.head_drop.register_forward_hook(get_features('feat_w'))
+                else:
+                    witness_model_hook.avgpool.register_forward_hook(get_features('feat_w'))
+
             elif args.dataset.startswith('cifar'):
                 if args.source_arch.startswith('preactresnet'):
                     source_model_hook.avgpool.register_forward_hook(get_features('feat_s'))
