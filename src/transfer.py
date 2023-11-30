@@ -544,3 +544,119 @@ def model_align_feature_space(train_loader, module_list, criterion_list, optimiz
             break
 
     return top1.avg, top5.avg, losses.avg, [loss_history, loss_cls_history, loss_kd_history]
+
+def model_align_multiple_feature_space(train_loader, module_list, criterion_list, optimizer, lr_scheduler, scaler, epoch, device, args, is_main_task):
+    batch_time = AverageMeter('Time', ':6.3f')
+    data_time = AverageMeter('Data', ':6.3f')
+    losses = AverageMeter('Loss', ':.4e')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    progress = ProgressMeter(
+        len(train_loader),
+        [batch_time, data_time, losses, top1, top5],
+        prefix="Align Epoch: [{}]".format(epoch))
+
+    source_model = module_list[0]
+    num_witness = len(module_list)-1
+    list_witness_model = []
+    for i in range(num_witness):
+        list_witness_model.append(module_list[1+i])
+    # witness_model = module_list[1]
+    criterion_cls = criterion_list[0]
+    criterion_kd = criterion_list[1]
+
+    len_history = len(train_loader) if not args.debug else 3
+    loss_history = np.empty(len_history)
+    loss_cls_history = np.empty(len_history)
+    loss_kd_history = np.empty(len_history)
+
+    # switch to train mode
+    source_model.train()
+    for witness_model in list_witness_model:
+        witness_model.eval()
+        for param in witness_model.parameters():
+            param.requires_grad = False
+
+    if args.project_source_embedding:
+        source_projection = module_list[2]
+        source_projection.train()
+
+    if args.noise_type != 'none':
+        param = {'ord': np.inf,
+                 'epsilon': args.pgd_eps,
+                 'alpha': args.pgd_alpha,
+                 'num_iter': 10,
+                 'restarts': 1,
+                 'rand_init': True,
+                 'clip': True,
+                 'loss_fn': nn.CrossEntropyLoss(),
+                 'dataset': args.dataset}
+        if args.noise_type == 'rand_init':
+            param['num_iter'] = 0
+        elif args.noise_type.startswith('pgd'):
+            _itr = args.noise_type[3:-6] if args.noise_type.endswith('indep') else args.noise_type[3::]
+            param['num_iter'] = int(_itr)
+        attacker = pgd(**param)
+
+    end = time.time()
+    for i, (images, target) in enumerate(train_loader):
+        # measure data loading time
+        data_time.update(time.time() - end)
+
+        # move data to the same device as model
+        images = images.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+
+        delta = 0
+
+        loss_kd = 0
+
+        p_s = source_model(images+delta)
+        for witness_model in list_witness_model:
+            with ctx_noparamgrad_and_eval(witness_model):
+                p_w = witness_model(images+delta)
+
+            loss_kd += criterion_kd(p_s, p_w)
+
+        loss_cls = criterion_cls(p_s, target)
+        loss = args.lambda_kd * (1/num_witness)*loss_kd + args.lambda_cls * loss_cls
+
+        loss *= -1 if args.misalign else 1
+        # compute gradient and do SGD step
+        optimizer.zero_grad()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            if args.clip_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(source_model.parameters(), args.clip_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if args.clip_grad_norm is not None:
+                nn.utils.clip_grad_norm_(source_model.parameters(), args.clip_grad_norm)
+            optimizer.step()
+
+        if lr_scheduler is not None:
+            lr_scheduler.step((i+1)/len(train_loader))
+
+        # measure accuracy and record loss
+        acc1, acc5 = accuracy(p_s, target, topk=(1, 5))
+        losses.update(loss.item(), images.size(0))
+        top1.update(acc1[0], images.size(0))
+        top5.update(acc5[0], images.size(0))
+
+        loss_history[i] = loss.item()
+        loss_cls_history[i] = loss_cls.item()
+        loss_kd_history[i] = loss_kd.item()
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if (i % args.print_freq == 0 and is_main_task) or args.debug:
+            progress.display(i + 1)
+        if args.debug and i == 2:
+            break
+
+    return top1.avg, top5.avg, losses.avg, [loss_history, loss_cls_history, loss_kd_history]
