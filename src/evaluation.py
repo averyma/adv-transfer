@@ -52,6 +52,21 @@ CORRUPTIONS_IMAGENET_C=['brightness',
                         'zoom_blur'
                        ]
 
+# def accuracy(output, target, topk=(1, )):
+    # """Computes the precision@k for the specified values of k"""
+    # maxk = max(topk)
+    # batch_size = target.size(0)
+
+    # _, pred = output.topk(maxk, 1, True, True)
+    # pred = pred.t()
+    # correct = pred.eq(target.reshape(1, -1).expand_as(pred))
+
+    # res = []
+    # for k in topk:
+        # correct_k = correct[:k].reshape(-1).float().sum(0)
+        # res.append(correct_k.mul_(100.0 / batch_size))
+    # return res
+
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
     with torch.no_grad():
@@ -820,6 +835,7 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
         eps = 4/255
         alpha = 1/255
         num_eval = 100
+
     else:
         if atk_method.endswith('strong'):
             steps = 40
@@ -844,12 +860,14 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
         attacker = pgd_linbp(**param)
     else:
         if atk_method.startswith('pgd'):
+
             atk_a = torchattacks.PGD(
                 model_a,
                 eps=eps,
                 alpha=alpha,
                 steps=steps,
                 random_start=True)
+
             atk_b = torchattacks.PGD(
                 model_b,
                 eps=eps,
@@ -862,6 +880,7 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
                 eps=eps,
                 alpha=alpha,
                 steps=steps)
+
             atk_b = torchattacks.MIFGSM(
                 model_b,
                 eps=eps,
@@ -873,6 +892,7 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
                 eps=eps,
                 alpha=alpha,
                 steps=steps)
+
             atk_b = torchattacks.NIFGSM(
                 model_b,
                 eps=eps,
@@ -884,6 +904,7 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
                 eps=eps,
                 alpha=alpha,
                 steps=steps)
+
             atk_b = torchattacks.VNIFGSM(
                 model_b,
                 eps=eps,
@@ -895,6 +916,7 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
                 eps=eps,
                 alpha=alpha,
                 steps=steps)
+
             atk_b = torchattacks.VMIFGSM(
                 model_b,
                 eps=eps,
@@ -906,6 +928,7 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
                 eps=eps,
                 alpha=alpha,
                 steps=steps)
+
             atk_b = torchattacks.SINIFGSM(
                 model_b,
                 eps=eps,
@@ -917,6 +940,7 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
                 eps=eps,
                 alpha=alpha,
                 steps=steps)
+
             atk_b = torchattacks.TIFGSM(
                 model_b,
                 eps=eps,
@@ -928,11 +952,13 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
                 eps=eps,
                 alpha=alpha,
                 steps=steps)
+
             atk_b = torchattacks.DIFGSM(
                 model_b,
                 eps=eps,
                 alpha=alpha,
                 steps=steps)
+
         atk_a.set_normalization_used(mean=mean, std=std)
         atk_b.set_normalization_used(mean=mean, std=std)
 
