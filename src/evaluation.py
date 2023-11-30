@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from src.attacks import pgd
+from src.attacks import pgd, pgd_linbp
 from src.context import ctx_noparamgrad_and_eval
 import ipdb
 from tqdm import trange
@@ -51,21 +51,6 @@ CORRUPTIONS_IMAGENET_C=['brightness',
                         'speckle_noise',
                         'zoom_blur'
                        ]
-
-# def accuracy(output, target, topk=(1, )):
-    # """Computes the precision@k for the specified values of k"""
-    # maxk = max(topk)
-    # batch_size = target.size(0)
-
-    # _, pred = output.topk(maxk, 1, True, True)
-    # pred = pred.t()
-    # correct = pred.eq(target.reshape(1, -1).expand_as(pred))
-
-    # res = []
-    # for k in topk:
-        # correct_k = correct[:k].reshape(-1).float().sum(0)
-        # res.append(correct_k.mul_(100.0 / batch_size))
-    # return res
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
@@ -835,7 +820,6 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
         eps = 4/255
         alpha = 1/255
         num_eval = 100
-
     else:
         if atk_method.endswith('strong'):
             steps = 40
@@ -847,108 +831,110 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
             alpha = 1/255
         num_eval = 1000
 
-    if atk_method.startswith('pgd'):
-
-        atk_a = torchattacks.PGD(
-            model_a,
-            eps=eps,
-            alpha=alpha,
-            steps=steps,
-            random_start=True)
-
-        atk_b = torchattacks.PGD(
-            model_b,
-            eps=eps,
-            alpha=alpha,
-            steps=steps,
-            random_start=True)
-    elif atk_method.startswith('mi'):
-        atk_a = torchattacks.MIFGSM(
-            model_a,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-
-        atk_b = torchattacks.MIFGSM(
-            model_b,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-    elif atk_method.startswith('ni'):
-        atk_a = torchattacks.NIFGSM(
-            model_a,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-
-        atk_b = torchattacks.NIFGSM(
-            model_b,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-    elif atk_method.startswith('vni'):
-        atk_a = torchattacks.VNIFGSM(
-            model_a,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-
-        atk_b = torchattacks.VNIFGSM(
-            model_b,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-    elif atk_method.startswith('vmi'):
-        atk_a = torchattacks.VMIFGSM(
-            model_a,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-
-        atk_b = torchattacks.VMIFGSM(
-            model_b,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-    elif atk_method.startswith('sini'):
-        atk_a = torchattacks.SINIFGSM(
-            model_a,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-
-        atk_b = torchattacks.SINIFGSM(
-            model_b,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-    elif atk_method.startswith('ti'):
-        atk_a = torchattacks.TIFGSM(
-            model_a,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-
-        atk_b = torchattacks.TIFGSM(
-            model_b,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-    elif atk_method.startswith('di'):
-        atk_a = torchattacks.DIFGSM(
-            model_a,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-
-        atk_b = torchattacks.DIFGSM(
-            model_b,
-            eps=eps,
-            alpha=alpha,
-            steps=steps)
-
-    atk_a.set_normalization_used(mean=mean, std=std)
-    atk_b.set_normalization_used(mean=mean, std=std)
+    if atk_method.startswith('linbp'):
+        param = {'ord': np.inf,
+                 'epsilon': eps,
+                 'alpha': alpha,
+                 'num_iter': steps,
+                 'restarts': 1,
+                 'rand_init': True,
+                 'clip': True,
+                 'loss_fn': nn.CrossEntropyLoss(),
+                 'dataset': 'imagenet'}
+        attacker = pgd_linbp(**param)
+    else:
+        if atk_method.startswith('pgd'):
+            atk_a = torchattacks.PGD(
+                model_a,
+                eps=eps,
+                alpha=alpha,
+                steps=steps,
+                random_start=True)
+            atk_b = torchattacks.PGD(
+                model_b,
+                eps=eps,
+                alpha=alpha,
+                steps=steps,
+                random_start=True)
+        elif atk_method.startswith('mi'):
+            atk_a = torchattacks.MIFGSM(
+                model_a,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+            atk_b = torchattacks.MIFGSM(
+                model_b,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+        elif atk_method.startswith('ni'):
+            atk_a = torchattacks.NIFGSM(
+                model_a,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+            atk_b = torchattacks.NIFGSM(
+                model_b,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+        elif atk_method.startswith('vni'):
+            atk_a = torchattacks.VNIFGSM(
+                model_a,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+            atk_b = torchattacks.VNIFGSM(
+                model_b,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+        elif atk_method.startswith('vmi'):
+            atk_a = torchattacks.VMIFGSM(
+                model_a,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+            atk_b = torchattacks.VMIFGSM(
+                model_b,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+        elif atk_method.startswith('sini'):
+            atk_a = torchattacks.SINIFGSM(
+                model_a,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+            atk_b = torchattacks.SINIFGSM(
+                model_b,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+        elif atk_method.startswith('ti'):
+            atk_a = torchattacks.TIFGSM(
+                model_a,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+            atk_b = torchattacks.TIFGSM(
+                model_b,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+        elif atk_method.startswith('di'):
+            atk_a = torchattacks.DIFGSM(
+                model_a,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+            atk_b = torchattacks.DIFGSM(
+                model_b,
+                eps=eps,
+                alpha=alpha,
+                steps=steps)
+        atk_a.set_normalization_used(mean=mean, std=std)
+        atk_b.set_normalization_used(mean=mean, std=std)
 
     def run_validate_one_iteration(images, target):
         end = time.time()
@@ -961,10 +947,16 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
             target = target.cuda(args.gpu, non_blocking=True)
 
         with ctx_noparamgrad_and_eval(model_a):
-            delta_a = atk_a(images, target) - images
+            if atk_method.startswith('linbp'):
+                delta_a = attacker.generate(model_a, images, target)
+            else:
+                delta_a = atk_a(images, target) - images
 
         with ctx_noparamgrad_and_eval(model_b):
-            delta_b = atk_b(images, target) - images
+            if atk_method.startswith('linbp'):
+                delta_b = attacker.generate(model_b, images, target)
+            else:
+                delta_b = atk_b(images, target) - images
 
         # compute output
         with torch.no_grad():
