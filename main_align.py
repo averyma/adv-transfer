@@ -16,8 +16,7 @@ from torch.utils.data import Subset
 
 import numpy as np
 
-from src.args import get_args, print_args
-from src.evaluation import test_clean, test_AA, eval_corrupt, eval_CE, test_gaussian, CORRUPTIONS_IMAGENET_C
+from src.args import get_args, print_args, get_base_model_dir
 
 from src.utils_dataset import load_dataset, load_imagenet_test_shuffle, load_imagenet_test_1k
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
@@ -28,37 +27,10 @@ from src.attacks import pgd
 from src.context import ctx_noparamgrad_and_eval
 import torch.nn.functional as F
 import ipdb
-from src.evaluation import validate, eval_transfer, eval_transfer_bi_direction, eval_transfer_bi_direction_two_metric
-from src.transfer import model_align, model_align_feature_space
+from src.evaluation import validate, eval_transfer
+from src.align import align_feature_space
 from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss, SymmetricKL
 
-root_dir = '/scratch/ssd001/home/ama/workspace/adv-transfer/ckpt/'
-model_ckpt = {
-        # 'cifar10': {
-            # 'preactresnet18': '2023-07-19/cifar10/cosine/20230719-cifar10-preactresnet18-0.1-4',
-            # 'preactresnet50': '2023-07-21/cifar10/cosine/20230721-cifar10-preactresnet50-0.1-4',
-            # 'vgg19': '2023-07-27/20230727-cifar10-vgg19-0.1-4',
-            # 'vit_small': '2023-08-02/20230802-cifar10-vit_small-0.1-4'
-            # },
-        # 'cifar100': {
-            # 'preactresnet18': '2023-07-19/cifar100/cosine/20230719-cifar100-preactresnet18-0.1-4',
-            # 'preactresnet50': '2023-07-21/cifar100/cosine/20230721-cifar100-preactresnet50-0.1-4',
-            # 'vgg19': '2023-07-27/20230727-cifar100-vgg19-0.1-4',
-            # 'vit_small': '2023-08-02/20230802-cifar100-vit_small-0.1-4'
-            # },
-        'imagenet': {
-            'resnet18': '20230726-imagenet-resnet18-256-4',
-            'resnet50': '20230726-imagenet-resnet50-256-4',
-            'resnet101': '20230928-4gpu-rtx6000,t4v2-imagenet-resnet101-256-4',
-            'vgg19_bn': '20230810-4gpu-rtx6000-imagenet-vgg19_bn-256-4',
-            'densenet121': '20230928-4gpu-rtx6000,t4v2-imagenet-densenet121-256-4',
-            'inception_v3': '20230928-4gpu-rtx6000,t4v2-imagenet-inception_v3-256-4',
-            'swin_t': '20230926-8gpu-t4v2-imagenet-swin_t-1024-4',
-            'vit_t_16': '20230929-8gpu-t4v2-imagenet-vit_t_16-1024-4',
-            'vit_s_16': '20230929-8gpu-t4v2-imagenet-vit_s_16-1024-4',
-            'vit_b_16': '20231010-8gpu-t4v2-imagenet-vit_b_16-1024-4',
-            }
-        }
 
 def ddp_setup(dist_backend, dist_url, rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -135,21 +107,30 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         list_target_arch = ['resnet18', 'resnet50', 'resnet101',
                             'densenet121', 'inception_v3', 'vgg19_bn',
-                            'swin_t', 'vit_t_16', 'vit_s_16', 'vit_b_16']
+                            'swin_t', 'swin_s', 'vit_t_16', 'vit_s_16', 'vit_b_16']
 
-    if args.seed == 0:
-        source_idx, witness_idx, target_idx = 0, 1, 2
-    elif args.seed == 1:
-        source_idx, witness_idx, target_idx = 1, 2, 0
-    elif args.seed == 2:
-        source_idx, witness_idx, target_idx = 2, 0, 1
+    witness_idx = list(range(2, 2+args.num_witness))
+    print('Source model idx: {}\n'
+          'Witness model idx: {}\n'
+          'Target model idx: {}'.format(
+              args.source_idx, witness_idx, args.target_idx))
 
+    if args.source_idx == args.target_idx:
+        raise ValueError('Source and target model indices are both {}!'.format(args.source_idx))
+    if args.target_idx in witness_idx:
+        raise ValueError('Witness model(s) includes target model!')
+    if args.target_idx >= 2:
+        raise ValueError('Some arch only has three models.')
+
+    base_model_dir = get_base_model_dir(
+            '/scratch/ssd001/home/ama/workspace/adv-transfer/options/ckpt_summary.yaml'
+            )
     args.arch = args.source_arch
     source_model = get_model(args)
     source_model_dir = os.path.join(
-        root_dir, args.dataset, args.source_arch,
-        model_ckpt[args.dataset][args.source_arch]+str(source_idx), 'model/best_model.pt'
-        )
+        base_model_dir['root'], args.dataset, args.source_arch,
+        base_model_dir[args.dataset][args.source_arch][args.source_idx],
+        'model/best_model.pt')
     ckpt = torch.load(source_model_dir, map_location=device)
     try:
         source_model.load_state_dict(ckpt)
@@ -158,18 +139,21 @@ def main_worker(gpu, ngpus_per_node, args):
     orig_source_model = copy.deepcopy(source_model)
     print('{}: Load source model from {}.'.format(device, source_model_dir))
 
-    args.arch = args.witness_arch
-    witness_model = get_model(args)
-    witness_model_dir = os.path.join(
-        root_dir, args.dataset, args.witness_arch,
-        model_ckpt[args.dataset][args.witness_arch]+str(witness_idx), 'model/best_model.pt'
-        )
-    ckpt = torch.load(witness_model_dir, map_location=device)
-    try:
-        witness_model.load_state_dict(ckpt)
-    except RuntimeError:
-        witness_model.load_state_dict(remove_module(ckpt))
-    print('{}: Load witness model from {}.'.format(device, witness_model_dir))
+    list_witness_model = nn.ModuleList([])
+    for w_idx in witness_idx:
+        args.arch = args.witness_arch
+        witness_model = get_model(args)
+        witness_model_dir = os.path.join(
+            base_model_dir['root'], args.dataset, args.witness_arch,
+            base_model_dir[args.dataset][args.witness_arch][w_idx],
+            'model/best_model.pt')
+        ckpt = torch.load(witness_model_dir, map_location=device)
+        try:
+            witness_model.load_state_dict(ckpt)
+        except RuntimeError:
+            witness_model.load_state_dict(remove_module(ckpt))
+        print('{}: Load witness model from {}.'.format(device, witness_model_dir))
+        list_witness_model.append(copy.deepcopy(witness_model))
 
     if args.method not in ['kl', 'symkl']:
         if args.source_arch != args.witness_arch:
@@ -206,30 +190,20 @@ def main_worker(gpu, ngpus_per_node, args):
     result = {
             'loss': None,
             'loss_cls': None,
-            'loss_kd': None,
+            'loss_align': None,
             'pre/test-err': None,
             'post/test-err': None,
             'diff/test-err': None,
             'pre/whitebox-err': None,
             'post/whitebox-err': None,
             'diff/whitebox-err': None,
-            'pre/avg-transfer-from': None,
-            'post/avg-transfer-from': None,
-            'diff/avg-transfer-from': None,
-            'pre/avg-transfer-to': None,
-            'post/avg-transfer-to': None,
-            'diff/avg-transfer-to': None,
+            'pre/avg-err': None,
+            'post/avg-err': None,
+            'diff/avg-err': None,
                 }
-    for _arch in list_target_arch:
-        for _metric in ['pre', 'post', 'diff']:
-            for _to_from in ['to', 'from']:
-                result[_metric+'/transfer-'+_to_from+'-'+_arch] = None
-
-    result_temp = copy.deepcopy(result)
-    for key in result_temp.keys():
-        if 'transfer' in key:
-            result['NS/'+key] = None
-    del result_temp
+    for target_arch in list_target_arch:
+        for metric in ['pre/', 'post/', 'diff/']:
+            result[metric+target_arch] = None
 
     if not torch.cuda.is_available():
         # print('using CPU, this will be slow')
@@ -242,7 +216,7 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.cuda.set_device(args.gpu)
         source_model.cuda(args.gpu)
         orig_source_model.cuda(args.gpu)
-        witness_model.cuda(args.gpu)
+        list_witness_model.cuda(args.gpu)
         if args.project_source_embedding:
             source_projection.cuda(args.gpu)
         # When using a single GPU per process and per
@@ -250,19 +224,16 @@ def main_worker(gpu, ngpus_per_node, args):
         # ourselves based on the total number of GPUs of the current node.
         args.batch_size = int(args.batch_size / args.ngpus_per_node)
         args.workers = args.ncpus_per_node//max(args.ngpus_per_node, 1)
-        # args.workers = 2
-        # args.workers = 0
-        print("GPU: {}, batch_size: {}, ncpus_per_node: {}, ngpus_per_node: {}, workers: {}".format(args.gpu, args.batch_size, args.ncpus_per_node, args.ngpus_per_node, args.workers))
+        print("GPU: {}, batch_size: {}, ncpus_per_node: {}, ngpus_per_node: {}, workers: {}".format(
+            args.gpu, args.batch_size, args.ncpus_per_node, args.ngpus_per_node, args.workers))
         source_model = torch.nn.parallel.DistributedDataParallel(source_model, device_ids=[args.gpu])
-        orig_source_model = torch.nn.parallel.DistributedDataParallel(orig_source_model, device_ids=[args.gpu])
-        witness_model = torch.nn.parallel.DistributedDataParallel(witness_model, device_ids=[args.gpu])
         if args.project_source_embedding:
             source_projection = torch.nn.parallel.DistributedDataParallel(source_projection, device_ids=[args.gpu])
     else:
         torch.cuda.set_device(args.gpu)
         source_model = source_model.cuda(args.gpu)
         orig_source_model = orig_source_model.cuda(args.gpu)
-        witness_model = witness_model.cuda(args.gpu)
+        list_witness_model = list_witness_model.cuda(args.gpu)
         if args.project_source_embedding:
             source_projection = source_projection.cuda(args.gpu)
 
@@ -271,7 +242,6 @@ def main_worker(gpu, ngpus_per_node, args):
     print('{}: is_main_task: {}'.format(device, is_main_task))
 
     ckpt_dir = os.path.join(args.j_dir, 'ckpt')
-    log_dir = os.path.join(args.j_dir, 'log')
     ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
     ckpt_location_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
 
@@ -324,26 +294,18 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.method == 'nce':
         criterion_kd = NCELoss(args.nce_temp).to(device)
     elif args.method == 'kl':
-        criterion_kd = DistillKL(args.kl_temp).to(device)
+        criterion_kd = DistillKL(args.kl_temp, args.kl_reduction).to(device)
     elif args.method == 'symkl':
         criterion_kd = SymmetricKL().to(device)
+    else:
+        raise ValueError('Invalid align menthod: {}!'.format(args.method))
 
-    criterion_list = nn.ModuleList([])
-    criterion_list.append(criterion_cls)
-    criterion_list.append(criterion_kd)
-
-    module_list = nn.ModuleList([])
-    module_list.append(source_model)
-    module_list.append(witness_model)
-
-    trainable_list = nn.ModuleList([])
-    trainable_list.append(source_model)
-
+    list_trainable = nn.ModuleList([])
+    list_trainable.append(source_model)
     if args.project_source_embedding:
-        module_list.append(source_projection)
-        trainable_list.append(source_projection)
+        list_trainable.append(source_projection)
 
-    opt, lr_scheduler = get_optim(trainable_list.parameters(), args)
+    opt, lr_scheduler = get_optim(list_trainable.parameters(), args)
     scaler = torch.cuda.amp.GradScaler() if args.amp else None
     if is_main_task:
         print('{}: agrs.amp: {}, scaler: {}'.format(device, args.amp, scaler))
@@ -418,10 +380,12 @@ def main_worker(gpu, ngpus_per_node, args):
         for _epoch in range(ckpt_epoch, args.epoch+1):
             if args.distributed:
                 train_sampler.set_epoch(_epoch)
-            train_acc1, train_acc5, loss, loss_history = model_align_feature_space(
+            train_acc1, train_acc5, loss, loss_history = align_feature_space(
                                                                     train_loader,
-                                                                    module_list,
-                                                                    criterion_list,
+                                                                    list_trainable,
+                                                                    list_witness_model,
+                                                                    criterion_kd,
+                                                                    criterion_cls,
                                                                     opt,
                                                                     lr_scheduler,
                                                                     scaler,
@@ -433,10 +397,10 @@ def main_worker(gpu, ngpus_per_node, args):
             if is_main_task:
                 result['loss'] = loss_history[0] if _epoch == 1 else np.concatenate((result['loss'], loss_history[0]))
                 result['loss_cls'] = loss_history[1] if _epoch == 1 else np.concatenate((result['loss_cls'], loss_history[1]))
-                result['loss_kd'] = loss_history[2] if _epoch == 1 else np.concatenate((result['loss_kd'], loss_history[2]))
-                ckpt = {"state_dict": module_list[0].state_dict(), 'result': result, 'ckpt_epoch': _epoch+1}
+                result['loss_align'] = loss_history[2] if _epoch == 1 else np.concatenate((result['loss_align'], loss_history[2]))
+                ckpt = {"state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': _epoch+1}
                 if args.project_source_embedding:
-                    ckpt['projection'] = module_list[2].state_dict()
+                    ckpt['projection'] = source_projection.state_dict()
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
@@ -453,7 +417,7 @@ def main_worker(gpu, ngpus_per_node, args):
             source_model = torch.nn.parallel.DistributedDataParallel(source_model, device_ids=[args.gpu])
         print('{}: Load modified source model from {}.'.format(device, args.modified_source_model))
     del train_loader
-    del witness_model
+    del list_witness_model
     torch.cuda.empty_cache()
 ##########################################################
 ###################### Training ends #####################
@@ -471,9 +435,9 @@ def main_worker(gpu, ngpus_per_node, args):
             result[prefix + 'test-err'] = _result
             if is_main_task:
                 print(' *  {}: {:.2f}'.format(prefix + 'test-err', _result))
-                ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
+                ckpt = {"state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
                 if args.project_source_embedding:
-                    ckpt['projection'] = module_list[2].state_dict()
+                    ckpt['projection'] = source_projection.state_dict()
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
@@ -487,20 +451,20 @@ def main_worker(gpu, ngpus_per_node, args):
             result[prefix + 'whitebox-err'] = _result
             if is_main_task:
                 print(' *  {}: {:.2f}'.format(prefix + 'whitebox-err', _result))
-                ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
+                ckpt = {"state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
                 if args.project_source_embedding:
-                    ckpt['projection'] = module_list[2].state_dict()
+                    ckpt['projection'] = source_projection.state_dict()
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
         for target_arch in list_target_arch:
-            if result[prefix + 'transfer-from-' + target_arch] is None:
+            if result[prefix + target_arch] is None:
                 args.arch = target_arch
                 target_model = get_model(args)
                 target_model_dir = os.path.join(
-                    root_dir, args.dataset, target_arch,
-                    model_ckpt[args.dataset][target_arch]+str(target_idx), 'model/best_model.pt'
-                    )
+                    base_model_dir['root'], args.dataset, target_arch,
+                    base_model_dir[args.dataset][target_arch][args.target_idx],
+                    'model/best_model.pt')
                 print('{}: Load target model from {}.'.format(device, target_model_dir))
                 ckpt = torch.load(target_model_dir, map_location=device)
                 try:
@@ -509,39 +473,29 @@ def main_worker(gpu, ngpus_per_node, args):
                     target_model.load_state_dict(remove_module(ckpt))
                 target_model.cuda(args.gpu)
                 if args.distributed:
-                    target_model = torch.nn.parallel.DistributedDataParallel(target_model, device_ids=[args.gpu])
+                    target_model = torch.nn.parallel.DistributedDataParallel(target_model,
+                                                                             device_ids=[args.gpu])
 
                 if args.distributed:
                     dist.barrier()
                     if args.dataset == 'imagenet':
                         val_sampler.set_epoch(27)
-                acc1_target2source, acc1_source2target, acc1_target2source_NS, acc1_source2target_NS = eval_transfer_bi_direction_two_metric(
-                                                                    test_loader_shuffle,
-                                                                    model_a=target_model,
-                                                                    model_b=model,
-                                                                    args=args,
-                                                                    is_main_task=is_main_task)
+                _, acc1_source2target = eval_transfer(test_loader_shuffle,
+                                                      model_a=target_model,
+                                                      model_b=model,
+                                                      args=args,
+                                                      is_main_task=is_main_task)
 
-                _result_target2source = 100.-acc1_target2source
                 _result_source2target = 100.-acc1_source2target
-                _result_target2source_NS = 100.-acc1_target2source_NS
-                _result_source2target_NS = 100.-acc1_source2target_NS
                 if args.distributed:
                     dist.barrier()
                 if is_main_task:
-                    result[prefix + 'transfer-from-' + target_arch] = _result_target2source
-                    print(' *  {}: {:.2f}'.format(prefix + 'transfer-from-' + target_arch, _result_target2source))
-                    result[prefix + 'transfer-to-' + target_arch] = _result_source2target
-                    print(' *  {}: {:.2f}'.format(prefix + 'transfer-to-' + target_arch, _result_source2target))
+                    result[prefix + target_arch] = _result_source2target
+                    print(' *  {}: {:.2f}'.format(prefix + target_arch, _result_source2target))
 
-                    result['NS/'+prefix + 'transfer-from-' + target_arch] = _result_target2source_NS
-                    print(' *  {}: {:.2f}'.format('NS/'+prefix + 'transfer-from-' + target_arch, _result_target2source_NS))
-                    result['NS/'+prefix + 'transfer-to-' + target_arch] = _result_source2target_NS
-                    print(' *  {}: {:.2f}'.format('NS/'+prefix + 'transfer-to-' + target_arch, _result_source2target_NS))
-
-                    ckpt = { "state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
+                    ckpt = {"state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
                     if args.project_source_embedding:
-                        ckpt['projection'] = module_list[2].state_dict()
+                        ckpt['projection'] = source_projection.state_dict()
                     rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                     logger.save_log()
 
@@ -550,20 +504,17 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Logging and checkpointing only at the main task (rank0)
     if is_main_task:
-        for _metric in ['test-err', 'whitebox-err', 'transfer-from-', 'transfer-to-']:
-            if _metric in ['transfer-from-', 'transfer-to-']:
-                for _arch in list_target_arch:
-                    result['diff/{}{}'.format(_metric, _arch)] = result['post/{}{}'.format(_metric, _arch)] - result['pre/{}{}'.format(_metric, _arch)]
-                    result['NS/diff/{}{}'.format(_metric, _arch)] = result['NS/post/{}{}'.format(_metric, _arch)] - result['NS/pre/{}{}'.format(_metric, _arch)]
-            else:
-                result['diff/{}'.format(_metric)] = result['post/{}'.format(_metric)] - result['pre/{}'.format(_metric)]
+        for metric in ['test-err', 'whitebox-err']:
+            result['diff/{}'.format(metric)] = result['post/{}'.format(metric)] - result['pre/{}'.format(metric)]
 
-        for _metric in ['avg-transfer-from', 'avg-transfer-to']:
-            for _prefix in ['pre/', 'post/', 'diff/', 'NS/pre/', 'NS/post/', 'NS/diff/']:
-                _result = 0
-                for _arch in list_target_arch:
-                    _result += result[_prefix+_metric[4:]+'-'+_arch]/len(list_target_arch)
-                result[_prefix+_metric] = _result
+        for target_arch in list_target_arch:
+            result['diff/{}'.format(target_arch)] = result['post/{}'.format(target_arch)] - result['pre/{}'.format(target_arch)]
+
+        for prefix in ['pre/', 'post/', 'diff/']:
+            _result = 0
+            for target_arch in list_target_arch:
+                _result += result[prefix+target_arch]/len(list_target_arch)
+            result[prefix+'avg-err'] = _result
 
         for key in result.keys():
             if 'loss' not in key:
@@ -571,15 +522,12 @@ def main_worker(gpu, ngpus_per_node, args):
                 logging.info("{}: {:.2f}\t".format(key, result[key]))
             else:
                 num_align_iteration = len(result['loss'])
-                # for i in range(num_align_iteration):
-                    # logger.add_scalar(key, result[key][i], i+1)
 
     if args.distributed:
         dist.barrier()
 
     # upload runs to wandb:
     if is_main_task:
-        # if result['diff/avg-transfer-to'] > 0 and result['diff/avg-transfer-from'] < 0:
         if args.save_modified_model:
             print('Saving final model!')
             saveModel(args.j_dir+"/model/", "final_model", source_model.state_dict())
