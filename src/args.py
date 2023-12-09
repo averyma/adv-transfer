@@ -149,8 +149,6 @@ def parse_args():
                         default='none', type=str)
     parser.add_argument("--save_modified_model",
                         default=False, type=distutils.util.strtobool)
-    parser.add_argument("--misalign",
-                        default=False, type=distutils.util.strtobool)
     # the following pgd params are used in whitebox and transfer evaluations
     # if alignment is performed at pgd perturbed datapoint, the same pgd_eps, pgd_alpha
     # will be used, the number of iteration is specified in ${noise_type}
@@ -175,12 +173,17 @@ def parse_args():
                             default=0.1, type=float)
     parser.add_argument("--kl_temp",
                             default=4., type=float)
+    parser.add_argument("--kl_reduction",
+                            default='average', type=str)
     parser.add_argument("--always_proj",
                         default=True, type=distutils.util.strtobool)
     parser.add_argument("--lambda_cls",
                             default=0., type=float)
     parser.add_argument("--lambda_kd",
                             default=1., type=float)
+
+    parser.add_argument('--source_idx', default=0, type=int)
+    parser.add_argument('--target_idx', default=1, type=int)
 
 
     args = parser.parse_args()
@@ -204,6 +207,11 @@ def get_default(yaml_path):
     with open(yaml_path, 'r') as handle:
         default = yaml.load(handle, Loader=yaml.FullLoader)
     return default 
+
+def get_base_model_dir(yaml_path):
+    with open(yaml_path, 'r') as file:
+        base_model_dir = yaml.safe_load(file)
+    return base_model_dir
 
 def get_args():
     args = parse_args()
