@@ -10,7 +10,7 @@ import ipdb
 from typing import Any, Callable, List, Optional, Union, Tuple
 import os
 from PIL import Image
-import math
+import math, random
 
 from src.utils_augmentation import CustomAugment
 from src.sampler import RASampler
@@ -133,11 +133,14 @@ def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_aug
 
     return train_loader, test_loader, train_sampler, val_sampler
 
-def load_imagenet_test_shuffle(batch_size=128, workers=4, distributed=False):
+def load_imagenet_test_1k(batch_size=128, workers=4, selection='random', distributed=False):
 
     # default augmentation
     # mean/std obtained from: https://github.com/pytorch/examples/blob/97304e232807082c2e7b54c597615dc0ad8f6173/imagenet/main.py#L197-L198
     # detail: https://discuss.pytorch.org/t/normalization-in-the-mnist-example/457/7
+    if selection not in ['random', 'fixed']:
+        raise ValueError('{} not supported!'.format(selection))
+
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
@@ -147,46 +150,27 @@ def load_imagenet_test_shuffle(batch_size=128, workers=4, distributed=False):
         transforms.ToTensor(),
         transforms.Normalize(mean, std)
     ])
-    
-    # load dataset
-    dataroot = '/scratch/ssd002/datasets/imagenet'
-    valdir = os.path.join(dataroot, 'val')
-    data_test = datasets.ImageFolder(valdir,transform_test)
 
-    if distributed:
-        val_sampler = torch.utils.data.distributed.DistributedSampler(data_test)
-    else:
-        val_sampler = torch.utils.data.RandomSampler(data_test)
-
-    test_loader = torch.utils.data.DataLoader(
-        data_test, batch_size=batch_size, shuffle=(val_sampler is None),
-        num_workers=workers, pin_memory=True, sampler=val_sampler)
-
-    return test_loader, val_sampler
-
-def load_imagenet_test_1k(batch_size=128, workers=4, distributed=False):
-
-    # default augmentation
-    # mean/std obtained from: https://github.com/pytorch/examples/blob/97304e232807082c2e7b54c597615dc0ad8f6173/imagenet/main.py#L197-L198
-    # detail: https://discuss.pytorch.org/t/normalization-in-the-mnist-example/457/7
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
-
-    transform_test = transforms.Compose([
-        transforms.Resize(256, interpolation=Image.BICUBIC),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std)
-    ])
-    
     # load dataset
     dataroot = '/scratch/ssd002/datasets/imagenet'
     valdir = os.path.join(dataroot, 'val')
     data_test = datasets.ImageFolder(valdir, transform_test)
-    data_test_1k = Subset(data_test, range(0, len(data_test), 50))
+
+    if selection == 'random':
+        # randomly sample from the testset
+        random.seed(27)
+        sample_indices = random.sample(range(len(data_test)), 1000)
+    elif selection == 'fixed':
+        # select the first sample of every class, ensure every class is present
+        # during evaluation
+        sample_indices = range(0, len(data_test), 50)
+
+    data_test_1k = Subset(data_test, sample_indices)
 
     if distributed:
-        val_sampler = torch.utils.data.distributed.DistributedSampler(data_test_1k, shuffle=False, drop_last=True)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(data_test_1k,
+                                                                    shuffle=False,
+                                                                    drop_last=False)
     else:
         val_sampler = torch.utils.data.SequentialSampler(data_test_1k)
 
@@ -194,4 +178,4 @@ def load_imagenet_test_1k(batch_size=128, workers=4, distributed=False):
         data_test_1k, batch_size=batch_size, shuffle=False,
         num_workers=workers, pin_memory=True, sampler=val_sampler)
 
-    return test_loader
+    return test_loader, val_sampler
