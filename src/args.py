@@ -139,6 +139,8 @@ def parse_args():
                         default=argparse.SUPPRESS)
     parser.add_argument("--source_arch",
                         default=argparse.SUPPRESS)
+    parser.add_argument("--source_in_eval_mode",
+                        default=False, type=distutils.util.strtobool)
     parser.add_argument("--target_arch",
                         default=argparse.SUPPRESS)
     parser.add_argument("--witness_arch",
