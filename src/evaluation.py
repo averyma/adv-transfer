@@ -174,9 +174,6 @@ def eval_transfer(val_loader, model_a, model_b, args, is_main_task):
         random_start=True)
     atk_b.set_normalization_used(mean=mean, std=std)
 
-    num_eval = 1000 if args.dataset == 'imagenet' else 10000
-    num_eval = 100 if args.debug else num_eval
-
     def run_validate_one_iteration(images, target):
         end = time.time()
         if args.gpu is not None and torch.cuda.is_available():
@@ -240,10 +237,12 @@ def eval_transfer(val_loader, model_a, model_b, args, is_main_task):
         if (i % args.print_freq == 0 and is_main_task) or args.debug:
             progress.display(i + 1)
 
-        if args.distributed:
-            total_qualified.all_reduce()
+        # if args.distributed:
+            # total_qualified.all_reduce()
 
-        if total_qualified.sum > (num_eval/args.ngpus_per_node):
+        # if total_qualified.sum > (num_eval/args.ngpus_per_node):
+            # break
+        if args.debug:
             break
 
     if args.distributed:
@@ -251,6 +250,7 @@ def eval_transfer(val_loader, model_a, model_b, args, is_main_task):
         top1_a2b.all_reduce()
         top5_b2a.all_reduce()
         top5_a2b.all_reduce()
+        total_qualified.all_reduce()
 
     if is_main_task:
         progress.display_summary()
