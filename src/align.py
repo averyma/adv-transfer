@@ -31,7 +31,10 @@ def align_feature_space(train_loader, list_trainable, list_witness_model, criter
     source_model = list_trainable[0]
 
     # switch to train mode
-    source_model.train()
+    if args.source_in_eval_mode:
+        source_model.eval()
+    else:
+        source_model.train()
     list_witness_model.eval()
 
     if args.project_source_embedding:
