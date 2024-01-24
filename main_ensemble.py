@@ -27,7 +27,7 @@ from src.attacks import pgd
 from src.context import ctx_noparamgrad_and_eval
 import torch.nn.functional as F
 import ipdb
-from src.evaluation import validate, eval_transfer_ensemble
+from src.evaluation import validate, eval_transfer_ensemble, eval_transfer
 from src.align import align_feature_space
 from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss, SymmetricKL
 
@@ -115,51 +115,63 @@ def main_worker(gpu, ngpus_per_node, args):
             )
 
     if args.source_arch == 's1':
-        source_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-resnet50-W-resnet18-none-1ep-0.001-seed0/model/final_model.pt']
-        list_source_arch = ['resnet50']
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-resnet50-W-resnet18-none-1ep-0.001-seed0/model/final_model.pt']
+        ensemble_arch = ['resnet50']
     elif args.source_arch == 's2':
-        source_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-40/model/best_model.pt',
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet18/20230726-imagenet-resnet18-256-40/model/best_model.pt']
-        list_source_arch = ['resnet50', 'resnet18']
+        ensemble_arch = ['resnet50', 'resnet18']
     elif args.source_arch == 's3':
-        source_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-resnet50-W-resnet18-none-1ep-0.001-seed0/model/final_model.pt',
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-resnet50-W-resnet18-none-1ep-0.001-seed0/model/final_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-resnet50-W-resnet18-none-1ep-0.001-seed1/model/final_model.pt']
-        list_source_arch = ['resnet50', 'resnet50']
+        ensemble_arch = ['resnet50', 'resnet50']
     elif args.source_arch == 's4':
-        source_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-40/model/best_model.pt',
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet18/20230726-imagenet-resnet18-256-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-41/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet18/20230726-imagenet-resnet18-256-41/model/best_model.pt']
-        list_source_arch = ['resnet50', 'resnet18', 'resnet50', 'resnet18']
+        ensemble_arch = ['resnet50', 'resnet18', 'resnet50', 'resnet18']
     elif args.source_arch == 's5':
-        source_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-vit_b_16-W-vit_t_16-none-1ep-0.1-seed0/model/final_model.pt']
-        list_source_arch = ['vit_b_16']
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-vit_b_16-W-vit_t_16-none-1ep-0.1-seed0/model/final_model.pt']
+        ensemble_arch = ['vit_b_16']
     elif args.source_arch == 's6':
-        source_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_b_16/20231010-8gpu-t4v2-imagenet-vit_b_16-1024-40/model/best_model.pt',
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_b_16/20231010-8gpu-t4v2-imagenet-vit_b_16-1024-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_t_16/20230929-8gpu-t4v2-imagenet-vit_t_16-1024-40/model/best_model.pt']
-        list_source_arch = ['vit_b_16', 'vit_t_16']
+        ensemble_arch = ['vit_b_16', 'vit_t_16']
     elif args.source_arch == 's7':
-        source_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-vit_b_16-W-vit_t_16-none-1ep-0.1-seed0/model/final_model.pt',
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-vit_b_16-W-vit_t_16-none-1ep-0.1-seed0/model/final_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-vit_b_16-W-vit_t_16-none-1ep-0.1-seed1/model/final_model.pt']
-        list_source_arch = ['vit_b_16', 'vit_b_16']
+        ensemble_arch = ['vit_b_16', 'vit_b_16']
     elif args.source_arch == 's8':
-        source_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_b_16/20231010-8gpu-t4v2-imagenet-vit_b_16-1024-40/model/best_model.pt',
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_b_16/20231010-8gpu-t4v2-imagenet-vit_b_16-1024-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_t_16/20230929-8gpu-t4v2-imagenet-vit_t_16-1024-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_b_16/20231010-8gpu-t4v2-imagenet-vit_b_16-1024-41/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_t_16/20230929-8gpu-t4v2-imagenet-vit_t_16-1024-41/model/best_model.pt']
-        list_source_arch = ['vit_b_16', 'vit_t_16', 'vit_b_16', 'vit_t_16']
+        ensemble_arch = ['vit_b_16', 'vit_t_16', 'vit_b_16', 'vit_t_16']
+    elif args.source_arch == 's9':
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-40/model/best_model.pt']
+        ensemble_arch = ['resnet50']
+    elif args.source_arch == 's10':
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet18/20230726-imagenet-resnet18-256-40/model/best_model.pt']
+        ensemble_arch = ['resnet18']
+    elif args.source_arch == 's11':
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_b_16/20231010-8gpu-t4v2-imagenet-vit_b_16-1024-40/model/best_model.pt']
+        ensemble_arch = ['vit_b_16']
+    elif args.source_arch == 's12':
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_t_16/20230929-8gpu-t4v2-imagenet-vit_t_16-1024-40/model/best_model.pt']
+        ensemble_arch = ['vit_t_16']
 
-    list_source_model = nn.ModuleList([])
-    for s in range(len(source_dir)):
-        args.arch = list_source_arch[s]
+    ensemble = nn.ModuleList([])
+    for _ensemble_arch, _ensemble_dir in zip(ensemble_arch, ensemble_dir):
+        args.arch = _ensemble_arch
         source_model = get_model(args)
-        ckpt = torch.load(source_dir[s], map_location=device)
+        ckpt = torch.load(_ensemble_dir, map_location=device)
         try:
             source_model.load_state_dict(ckpt)
         except RuntimeError:
             source_model.load_state_dict(remove_module(ckpt))
-        print('{}: Load source model from {}.'.format(device, source_dir[s]))
-        list_source_model.append(copy.deepcopy(source_model))
+        print('{}: Load source model from {}.'.format(device, _ensemble_dir))
+        ensemble.append(copy.deepcopy(source_model))
 
     result = {}
     for target_arch in list_target_arch:
@@ -174,7 +186,7 @@ def main_worker(gpu, ngpus_per_node, args):
         # should always set the single device scope, otherwise,
         # DistributedDataParallel will use all available devices.
         torch.cuda.set_device(args.gpu)
-        list_source_model.cuda(args.gpu)
+        ensemble.cuda(args.gpu)
         # When using a single GPU per process and per
         # DistributedDataParallel, we need to divide the batch size
         # ourselves based on the total number of GPUs of the current node.
@@ -184,13 +196,11 @@ def main_worker(gpu, ngpus_per_node, args):
             args.gpu, args.batch_size, args.ncpus_per_node, args.ngpus_per_node, args.workers))
     else:
         torch.cuda.set_device(args.gpu)
-        list_source_model = list_source_model.cuda(args.gpu)
+        ensemble = ensemble.cuda(args.gpu)
 
     is_main_task = not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)
 
     print('{}: is_main_task: {}'.format(device, is_main_task))
-
-    criterion_cls = nn.CrossEntropyLoss().to(device)
 
     ckpt_dir = os.path.join(args.j_dir, 'ckpt')
     ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
@@ -267,57 +277,6 @@ def main_worker(gpu, ngpus_per_node, args):
 ##########################################################
 ###################### Training begins ###################
 ##########################################################
-    # if args.distributed:
-        # dist.barrier()
-
-    # if args.modified_source_model is None:
-        # for _epoch in range(ckpt_epoch, args.epoch+1):
-            # if args.distributed:
-                # train_sampler.set_epoch(_epoch)
-            # train_acc1, train_acc5, loss, loss_history = align_feature_space(train_loader,
-                                                                             # list_trainable,
-                                                                             # list_witness_model,
-                                                                             # criterion_kd,
-                                                                             # criterion_cls,
-                                                                             # opt,
-                                                                             # lr_scheduler,
-                                                                             # scaler,
-                                                                             # _epoch,
-                                                                             # device,
-                                                                             # args,
-                                                                             # is_main_task)
-            # # checkpointing for preemption
-            # if is_main_task:
-                # result['loss'][_epoch-1] = loss
-                # result['loss_cls'][_epoch-1] = loss_history[1].mean()
-                # result['loss_align'][_epoch-1] = loss_history[2].mean()
-                # ckpt = {"optimizer": opt.state_dict(),
-                        # "state_dict": source_model.state_dict(),
-                        # 'result': result,
-                        # 'ckpt_epoch': _epoch+1}
-                # if scaler is not None:
-                    # ckpt["scaler"] = scaler.state_dict()
-                # if lr_scheduler is not None:
-                    # ckpt["lr_scheduler"] = lr_scheduler.state_dict()
-                # if args.project_source_embedding:
-                    # ckpt['projection'] = source_projection.state_dict()
-                # rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
-                # logger.save_log()
-
-            # if args.distributed:
-                # dist.barrier()
-    # else:
-        # ckpt = torch.load(args.modified_source_model, map_location=device)
-        # try:
-            # source_model.load_state_dict(ckpt)
-        # except RuntimeError:
-            # source_model.load_state_dict(remove_module(ckpt))
-        # source_model.cuda(args.gpu)
-        # if args.distributed:
-            # source_model = torch.nn.parallel.DistributedDataParallel(source_model, device_ids=[args.gpu])
-        # print('{}: Load modified source model from {}.'.format(device, args.modified_source_model))
-    # del train_loader
-    # torch.cuda.empty_cache()
 ##########################################################
 ###################### Training ends #####################
 ##########################################################
@@ -346,10 +305,10 @@ def main_worker(gpu, ngpus_per_node, args):
                 if args.dataset == 'imagenet':
                     val_sampler.set_epoch(27)
             acc1_source2target = eval_transfer_ensemble(test_loader_random_1k,
-                                                  model_a=target_model,
-                                                  list_source_model=list_source_model,
-                                                  args=args,
-                                                  is_main_task=is_main_task)
+                                                        model_a=target_model,
+                                                        ensemble=ensemble,
+                                                        args=args,
+                                                        is_main_task=is_main_task)
 
             _result_source2target = 100.-acc1_source2target
             if args.distributed:
