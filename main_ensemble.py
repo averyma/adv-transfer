@@ -147,7 +147,7 @@ def main_worker(gpu, ngpus_per_node, args):
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_t_16/20230929-8gpu-t4v2-imagenet-vit_t_16-1024-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_b_16/20231010-8gpu-t4v2-imagenet-vit_b_16-1024-41/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_t_16/20230929-8gpu-t4v2-imagenet-vit_t_16-1024-41/model/best_model.pt']
-        list_source_arch = ['vit_b_16', 'vit_t_16,''vit_b_16', 'vit_t_16']
+        list_source_arch = ['vit_b_16', 'vit_t_16', 'vit_b_16', 'vit_t_16']
 
     list_source_model = nn.ModuleList([])
     for s in range(len(source_dir)):
@@ -367,7 +367,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # Logging and checkpointing only at the main task (rank0)
     if is_main_task:
         for key in result.keys():
-            logger.add_scalar(key, result[key], args.epoch)
+            logger.add_scalar(key, result[key], 1)
             logging.info("{}: {:.2f}\t".format(key, result[key]))
     if args.distributed:
         dist.barrier()
