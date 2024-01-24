@@ -18,7 +18,7 @@ import numpy as np
 
 from src.args import get_args, print_args, get_base_model_dir
 
-from src.utils_dataset import load_dataset, load_imagenet_test_shuffle, load_imagenet_test_1k
+from src.utils_dataset import load_dataset, load_imagenet_test_1k
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
 from src.utils_general import seed_everything, get_model, get_optim, remove_module
 from src.transforms import get_mixup_cutmix
@@ -105,9 +105,12 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.dataset.startswith('cifar'):
         list_target_arch = ['preactresnet18', 'preactresnet50', 'vgg19', 'vit_small']
     else:
-        list_target_arch = ['resnet18', 'resnet50', 'resnet101',
-                            'densenet121', 'inception_v3', 'vgg19_bn',
-                            'swin_t', 'swin_s', 'vit_t_16', 'vit_s_16', 'vit_b_16']
+        if args.debug:
+            list_target_arch = ['resnet18']
+        else:
+            list_target_arch = ['resnet18', 'resnet50', 'resnet101',
+                                'densenet121', 'inception_v3', 'vgg19_bn',
+                                'swin_t', 'swin_s', 'vit_t_16', 'vit_s_16', 'vit_b_16']
 
     witness_idx = list(range(2, 2+args.num_witness))
     print('Source model idx: {}\n'
@@ -119,7 +122,7 @@ def main_worker(gpu, ngpus_per_node, args):
         raise ValueError('Source and target model indices are both {}!'.format(args.source_idx))
     if args.target_idx in witness_idx:
         raise ValueError('Witness model(s) includes target model!')
-    if args.target_idx >= 2:
+    if args.target_idx > 2:
         raise ValueError('Some arch only has three models.')
 
     base_model_dir = get_base_model_dir(
@@ -187,20 +190,18 @@ def main_worker(gpu, ngpus_per_node, args):
         source_projection = LinearProjection(dim_emb_source, dim_emb_witness)
     print('{}: Use linear projection: {}'.format(device, args.project_source_embedding))
 
-    result = {
-            'loss': None,
-            'loss_cls': None,
-            'loss_align': None,
-            'pre/test-err': None,
-            'post/test-err': None,
-            'diff/test-err': None,
-            'pre/whitebox-err': None,
-            'post/whitebox-err': None,
-            'diff/whitebox-err': None,
-            'pre/avg-err': None,
-            'post/avg-err': None,
-            'diff/avg-err': None,
-                }
+    result = {'loss': np.zeros(args.epoch),
+              'loss_cls': np.zeros(args.epoch),
+              'loss_align': np.zeros(args.epoch),
+              'pre/test-err': None,
+              'post/test-err': None,
+              'diff/test-err': None,
+              'pre/whitebox-err': None,
+              'post/whitebox-err': None,
+              'diff/whitebox-err': None,
+              'pre/avg-err': None,
+              'post/avg-err': None,
+              'diff/avg-err': None}
     for target_arch in list_target_arch:
         for metric in ['pre/', 'post/', 'diff/']:
             result[metric+target_arch] = None
@@ -241,6 +242,35 @@ def main_worker(gpu, ngpus_per_node, args):
 
     print('{}: is_main_task: {}'.format(device, is_main_task))
 
+    criterion_cls = nn.CrossEntropyLoss().to(device)
+
+    if args.method == 'rkd':
+        criterion_kd = RKDLoss(args.rkd_dist_ratio, args.rkd_angle_ratio).to(device)
+    elif args.method == 'ega':
+        criterion_kd = EGA(args.ega_node_weight, args.ega_edge_weight).to(device)
+    elif args.method == 'pkt':
+        criterion_kd = PKT().to(device)
+    elif args.method == 'hint':
+        criterion_kd = HintLoss(args.hint_weight).to(device)
+    elif args.method == 'nce':
+        criterion_kd = NCELoss(args.nce_temp).to(device)
+    elif args.method == 'kl':
+        criterion_kd = DistillKL(args.kl_temp, args.kl_reduction).to(device)
+    elif args.method == 'symkl':
+        criterion_kd = SymmetricKL().to(device)
+    else:
+        raise ValueError('Invalid align menthod: {}!'.format(args.method))
+
+    list_trainable = nn.ModuleList([])
+    list_trainable.append(source_model)
+    if args.project_source_embedding:
+        list_trainable.append(source_projection)
+
+    opt, lr_scheduler = get_optim(list_trainable.parameters(), args)
+    scaler = torch.cuda.amp.GradScaler() if args.amp else None
+    if is_main_task:
+        print('{}: agrs.amp: {}, scaler: {}'.format(device, args.amp, scaler))
+
     ckpt_dir = os.path.join(args.j_dir, 'ckpt')
     ckpt_location_curr = os.path.join(ckpt_dir, "ckpt_curr.pth")
     ckpt_location_prev = os.path.join(ckpt_dir, "ckpt_prev.pth")
@@ -271,8 +301,13 @@ def main_worker(gpu, ngpus_per_node, args):
     if valid_checkpoint and os.path.exists(load_this_ckpt):
         ckpt = torch.load(load_this_ckpt, map_location=device)
         source_model.load_state_dict(ckpt["state_dict"])
+        opt.load_state_dict(ckpt["optimizer"])
         result = ckpt['result']
         ckpt_epoch = ckpt['ckpt_epoch']
+        if lr_scheduler is not None:
+            lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
+        if scaler is not None:
+            scaler.load_state_dict(ckpt["scaler"])
         if args.project_source_embedding:
             source_projection.load_state_dict(ckpt['projection'])
         print("{}: CHECKPOINT LOADED!".format(device))
@@ -280,35 +315,6 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.cuda.empty_cache()
     else:
         print('{}: NO CHECKPOINT LOADED, FRESH START!'.format(device))
-
-    criterion_cls = nn.CrossEntropyLoss().to(device)
-
-    if args.method == 'rkd':
-        criterion_kd = RKDLoss(args.rkd_dist_ratio, args.rkd_angle_ratio).to(device)
-    elif args.method == 'ega':
-        criterion_kd = EGA(args.ega_node_weight, args.ega_edge_weight).to(device)
-    elif args.method == 'pkt':
-        criterion_kd = PKT().to(device)
-    elif args.method == 'hint':
-        criterion_kd = HintLoss(args.hint_weight).to(device)
-    elif args.method == 'nce':
-        criterion_kd = NCELoss(args.nce_temp).to(device)
-    elif args.method == 'kl':
-        criterion_kd = DistillKL(args.kl_temp, args.kl_reduction).to(device)
-    elif args.method == 'symkl':
-        criterion_kd = SymmetricKL().to(device)
-    else:
-        raise ValueError('Invalid align menthod: {}!'.format(args.method))
-
-    list_trainable = nn.ModuleList([])
-    list_trainable.append(source_model)
-    if args.project_source_embedding:
-        list_trainable.append(source_projection)
-
-    opt, lr_scheduler = get_optim(list_trainable.parameters(), args)
-    scaler = torch.cuda.amp.GradScaler() if args.amp else None
-    if is_main_task:
-        print('{}: agrs.amp: {}, scaler: {}'.format(device, args.amp, scaler))
 
     if args.distributed:
         dist.barrier()
@@ -329,42 +335,21 @@ def main_worker(gpu, ngpus_per_node, args):
     # train_loader and test_loader are the original loader for imagenet
     # train_sampler is necessary for alignment
     # val_sampler is removed so we can use the one from test_loader_shuffle
-    train_loader, test_loader, train_sampler, _ = load_dataset(
-                args.dataset,
-                args.batch_size,
-                args.workers,
-                args.distributed,
-                )
+    train_loader, test_loader, train_sampler, _ = load_dataset(args.dataset,
+                                                               args.batch_size,
+                                                               args.workers,
+                                                               args.distributed)
 
     if args.dataset == 'imagenet':
-        # test_loader_1k contains exactly 1 sample from each of the 1000 class
-        test_loader_1k = load_imagenet_test_1k(
-                    batch_size=32,
-                    workers=0,
-                    # workers=args.workers,
-                    distributed=args.distributed
-                    )
-        # test_loader_shuffle is contains the same number of data as the original
-        # but data is randomly shuffled, this is for evaluating transfer attack
-        test_loader_shuffle, val_sampler = load_imagenet_test_shuffle(
-                    batch_size=32,
-                    workers=0,
-                    # workers=args.workers,
-                    distributed=args.distributed
-                    )
+        # test_loader_random_1k contains 1000 randomly selected samples from
+        # the test set. The random seed is fixed to 27 to ensure the same random
+        # data is used during evaluations.
+        test_loader_random_1k, val_sampler = load_imagenet_test_1k(batch_size=32,
+                                                                   workers=0,
+                                                                   selection='random',
+                                                                   distributed=args.distributed)
     else:
-        test_loader_1k = test_loader
-        test_loader_shuffle = test_loader
-
-    print('{}: len(train_loader): {}\t'
-          'len(test_loader): {}\t'
-          'len(test_loader_1k): {}\t'
-          'len(test_loader_shuffle): {}'.format(
-           device,
-           len(train_loader)*args.batch_size,
-           len(test_loader)*args.batch_size,
-           len(test_loader_1k)*(32 if args.dataset == 'imagenet' else args.batch_size),
-           len(test_loader_shuffle)*(32 if args.dataset == 'imagenet' else args.batch_size)))
+        test_loader_random_1k = test_loader
 
     print('{}: Dataloader compelete! Ready for alignment!'.format(device))
 
@@ -380,25 +365,31 @@ def main_worker(gpu, ngpus_per_node, args):
         for _epoch in range(ckpt_epoch, args.epoch+1):
             if args.distributed:
                 train_sampler.set_epoch(_epoch)
-            train_acc1, train_acc5, loss, loss_history = align_feature_space(
-                                                                    train_loader,
-                                                                    list_trainable,
-                                                                    list_witness_model,
-                                                                    criterion_kd,
-                                                                    criterion_cls,
-                                                                    opt,
-                                                                    lr_scheduler,
-                                                                    scaler,
-                                                                    _epoch,
-                                                                    device,
-                                                                    args,
-                                                                    is_main_task)
+            train_acc1, train_acc5, loss, loss_history = align_feature_space(train_loader,
+                                                                             list_trainable,
+                                                                             list_witness_model,
+                                                                             criterion_kd,
+                                                                             criterion_cls,
+                                                                             opt,
+                                                                             lr_scheduler,
+                                                                             scaler,
+                                                                             _epoch,
+                                                                             device,
+                                                                             args,
+                                                                             is_main_task)
             # checkpointing for preemption
             if is_main_task:
-                result['loss'] = loss_history[0] if _epoch == 1 else np.concatenate((result['loss'], loss_history[0]))
-                result['loss_cls'] = loss_history[1] if _epoch == 1 else np.concatenate((result['loss_cls'], loss_history[1]))
-                result['loss_align'] = loss_history[2] if _epoch == 1 else np.concatenate((result['loss_align'], loss_history[2]))
-                ckpt = {"state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': _epoch+1}
+                result['loss'][_epoch-1] = loss
+                result['loss_cls'][_epoch-1] = loss_history[1].mean()
+                result['loss_align'][_epoch-1] = loss_history[2].mean()
+                ckpt = {"optimizer": opt.state_dict(),
+                        "state_dict": source_model.state_dict(),
+                        'result': result,
+                        'ckpt_epoch': _epoch+1}
+                if scaler is not None:
+                    ckpt["scaler"] = scaler.state_dict()
+                if lr_scheduler is not None:
+                    ckpt["lr_scheduler"] = lr_scheduler.state_dict()
                 if args.project_source_embedding:
                     ckpt['projection'] = source_projection.state_dict()
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
@@ -444,7 +435,12 @@ def main_worker(gpu, ngpus_per_node, args):
         if result[prefix + 'whitebox-err'] is None:
             if args.distributed:
                 dist.barrier()
-            test_acc1, test_acc5 = validate(test_loader_1k, model, criterion_cls, args, is_main_task, whitebox=True)
+            test_acc1, test_acc5 = validate(test_loader_random_1k,
+                                                        model,
+                                                        criterion_cls,
+                                                        args,
+                                                        is_main_task,
+                                                        whitebox=True)
             _result = 100.-test_acc1
             if args.distributed:
                 dist.barrier()
@@ -480,7 +476,7 @@ def main_worker(gpu, ngpus_per_node, args):
                     dist.barrier()
                     if args.dataset == 'imagenet':
                         val_sampler.set_epoch(27)
-                _, acc1_source2target = eval_transfer(test_loader_shuffle,
+                _, acc1_source2target = eval_transfer(test_loader_random_1k,
                                                       model_a=target_model,
                                                       model_b=model,
                                                       args=args,
@@ -522,7 +518,9 @@ def main_worker(gpu, ngpus_per_node, args):
                 logging.info("{}: {:.2f}\t".format(key, result[key]))
             else:
                 num_align_iteration = len(result['loss'])
-
+                for i in range(num_align_iteration):
+                    logger.add_scalar(key, result[key][i], i+1)
+                    logging.info("{}: {:.2f}\t".format(key, result[key][i]))
     if args.distributed:
         dist.barrier()
 

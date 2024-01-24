@@ -20,7 +20,6 @@ from torch.utils.data import Subset
 import numpy as np
 
 from src.args import get_args, print_args
-from src.evaluation import test_clean, test_AA, eval_corrupt, eval_CE, test_gaussian, CORRUPTIONS_IMAGENET_C
 
 from src.utils_dataset import load_dataset
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
