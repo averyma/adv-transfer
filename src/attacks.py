@@ -181,7 +181,7 @@ class pgd_ensemble(object):
         # parse thru the dictionary and modify user-specific params
         self.parse_param(**kwargs)
 
-    def generate(self, model_1, model_2, x, y):
+    def generate(self, ensemble, x, y):
         epsilon = self.param['epsilon']
         num_iter = self.param['num_iter']
         alpha = epsilon if num_iter == 1 else self.param['alpha']
@@ -251,8 +251,11 @@ class pgd_ensemble(object):
                 else:
                     delta = torch.zeros_like(x, requires_grad=True)
                 for t in range(num_iter):
-                    model.zero_grad()
-                    loss_1 = loss_fn(model_1(x + delta), y)
+                    ensemble.zero_grad()
+                    logit_sum = 0
+                    for model in ensemble:
+                        logit_sum += model(x+delta)/len(ensemble)
+                    loss = loss_fn(logit_sum, y)
                     loss.backward()
                     # first we need to make sure delta is within the specified lp ball
                     delta.data = (delta+adjust_alpha*delta.grad.detach().sign()).clamp(min=-adjust_eps,
