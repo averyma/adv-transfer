@@ -1,4 +1,4 @@
-root: '/scratch/ssd001/home/ama/workspace/adv-transfer/ckpt/'
+root: '/h/ama/workspace/adv-transfer/ckpt/'
 
 imagenet:
   resnet18:
