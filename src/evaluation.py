@@ -48,14 +48,34 @@ def return_qualified(p_0, p_1, p_adv_0, p_adv_1, target):
 
         return qualified
 
-def return_qualified_ensemble(p_0, target):
+def return_qualified_ensemble(p_clean, target):
     """Computes the accuracy over the k top predictions for the specified values of k"""
-    qualified = torch.ones(p_0.size(0), device=p_0.device)
+    '''
+    A given input is qualified if it can be correctly classified by all models
+    '''
+    qualified = torch.ones(p_clean.size(0), device=p_clean.device)
     with torch.no_grad():
-        for i in range(p_0.size(2)):
-            pred = p_0[:, :, i].topk(1, 1, True, True)[1].t()
+        for i in range(p_clean.size(2)):
+            pred = p_clean[:, :, i].topk(1, 1, True, True)[1].t()
             correct = pred.eq(target.view(1, -1).expand_as(pred)).squeeze()
             qualified *= correct
+    return qualified == 1.
+
+def return_qualified_ensemble_v2(p_clean, p_adv, target):
+    """Computes the accuracy over the k top predictions for the specified values of k"""
+    '''
+    A given input is qualified if it can be correctly classified by all models
+    AND its perturbed version needs to be incorrectly classified by the originating model
+    '''
+    qualified = torch.ones(p_clean.size(0), device=p_clean.device)
+    with torch.no_grad():
+        for i in range(p_clean.size(2)):
+            pred_clean = p_clean[:, :, i].topk(1, 1, True, True)[1].t()
+            pred_adv = p_adv[:, :, i].topk(1, 1, True, True)[1].t()
+            correct = pred_clean.eq(target.view(1, -1).expand_as(pred_clean)).squeeze()
+            incorrect = pred_adv.ne(target.view(1, -1).expand_as(pred_clean)).squeeze()
+            qualified *= correct
+            qualified *= incorrect
     return qualified == 1.
 
 def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
@@ -529,10 +549,10 @@ def eval_transfer_ensemble(val_loader, model_a, ensemble, args, is_main_task):
 
         # compute output
         with torch.no_grad():
-            p_a = model_a(images).unsqueeze(2)
+            p_clean = model_a(images).unsqueeze(2)
             for model in ensemble:
-                p_a = torch.cat([p_a, model(images).unsqueeze(2)], dim=2)
-        qualified = return_qualified_ensemble(p_a, target)
+                p_clean = torch.cat([p_clean, model(images).unsqueeze(2)], dim=2)
+        qualified = return_qualified_ensemble(p_clean, target)
 
         images, target = images[qualified, ::], target[qualified]
 
@@ -542,6 +562,112 @@ def eval_transfer_ensemble(val_loader, model_a, ensemble, args, is_main_task):
         # measure accuracy and record loss
         num_qualified = qualified.sum().item()
         p_b2a = model_a((images + delta))
+
+        acc1_b2a, acc5_b2a = accuracy(p_b2a, target, topk=(1, 5))
+
+        top1_b2a.update(acc1_b2a[0], num_qualified)
+        top5_b2a.update(acc5_b2a[0], num_qualified)
+        total_qualified.update(num_qualified)
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
+    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
+    progress = ProgressMeter(
+        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        [batch_time, top1_b2a, total_qualified],
+        prefix='Transfer: ')
+
+    # switch to evaluate mode
+    model_a.eval()
+    ensemble.eval()
+
+    for i, (images, target) in enumerate(val_loader):
+        run_validate_one_iteration(images, target)
+
+        if (i % args.print_freq == 0 and is_main_task) or args.debug:
+            progress.display(i + 1)
+
+        # if args.distributed:
+            # total_qualified.all_reduce()
+
+        # if total_qualified.sum > (num_eval/args.ngpus_per_node):
+            # break
+        if args.debug:
+            break
+
+    if args.distributed:
+        top1_b2a.all_reduce()
+        top5_b2a.all_reduce()
+        total_qualified.all_reduce()
+
+    if is_main_task:
+        progress.display_summary()
+
+    return top1_b2a.avg
+
+def eval_transfer_ensemble_v2(val_loader, model_a, ensemble, args, is_main_task):
+    if args.dataset == 'imagenet':
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+    elif args.dataset == 'cifar10':
+        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+        std = [x / 255 for x in [63.0, 62.1, 66.7]]
+    elif args.dataset == 'cifar100':
+        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
+        std = [x / 255 for x in [68.2, 65.4, 70.4]]
+
+    param = {'ord': np.inf,
+             'epsilon': args.pgd_eps,
+             'alpha': args.pgd_alpha,
+             'num_iter': args.pgd_itr,
+             'restarts': 1,
+             'rand_init': True,
+             'clip': True,
+             'loss_fn': nn.CrossEntropyLoss(),
+             'dataset': 'imagenet'}
+    attacker_ensemble = pgd_ensemble(**param)
+    attacker = pgd(**param)
+
+    def run_validate_one_iteration(images, target):
+        end = time.time()
+        if args.gpu is not None and torch.cuda.is_available():
+            images = images.cuda(args.gpu, non_blocking=True)
+        if torch.backends.mps.is_available():
+            images = images.to('mps')
+            target = target.to('mps')
+        if torch.cuda.is_available():
+            target = target.cuda(args.gpu, non_blocking=True)
+
+        # compute output
+        with torch.no_grad():
+            p_clean = model_a(images).unsqueeze(2)
+
+        with ctx_noparamgrad_and_eval(model_a):
+            delta = attacker.generate(model_a, images, target)
+        p_adv = model_a(images+delta).unsqueeze(2)
+
+        for model in ensemble:
+            with torch.no_grad():
+                p_clean = torch.cat([p_clean, model(images).unsqueeze(2)], dim=2)
+            with ctx_noparamgrad_and_eval(model):
+                delta = attacker.generate(model, images, target)
+            p_adv = torch.cat([p_adv, model(images+delta).unsqueeze(2)], dim=2)
+        ipdb.set_trace()
+        qualified = return_qualified_ensemble_v2(p_clean, p_adv, target)
+
+        images, target = images[qualified, ::], target[qualified]
+
+        with ctx_noparamgrad_and_eval(ensemble):
+            delta_ensemble = attacker_ensemble.generate(ensemble, images, target)
+
+        # measure accuracy and record loss
+        num_qualified = qualified.sum().item()
+        p_b2a = model_a(images + delta_ensemble)
 
         acc1_b2a, acc5_b2a = accuracy(p_b2a, target, topk=(1, 5))
 

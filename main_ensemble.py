@@ -27,7 +27,7 @@ from src.attacks import pgd
 from src.context import ctx_noparamgrad_and_eval
 import torch.nn.functional as F
 import ipdb
-from src.evaluation import validate, eval_transfer_ensemble, eval_transfer
+from src.evaluation import validate, eval_transfer_ensemble_v2, eval_transfer
 from src.align import align_feature_space
 from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss, SymmetricKL
 
@@ -304,7 +304,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 dist.barrier()
                 if args.dataset == 'imagenet':
                     val_sampler.set_epoch(27)
-            acc1_source2target = eval_transfer_ensemble(test_loader_random_1k,
+            acc1_source2target = eval_transfer_ensemble_v2(test_loader_random_1k,
                                                         model_a=target_model,
                                                         ensemble=ensemble,
                                                         args=args,
