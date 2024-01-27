@@ -657,7 +657,7 @@ def eval_transfer_ensemble_v2(val_loader, model_a, ensemble, args, is_main_task)
             with ctx_noparamgrad_and_eval(model):
                 delta = attacker.generate(model, images, target)
             p_adv = torch.cat([p_adv, model(images+delta).unsqueeze(2)], dim=2)
-        ipdb.set_trace()
+
         qualified = return_qualified_ensemble_v2(p_clean, p_adv, target)
 
         images, target = images[qualified, ::], target[qualified]
