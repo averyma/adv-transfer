@@ -27,7 +27,7 @@ from src.attacks import pgd
 from src.context import ctx_noparamgrad_and_eval
 import torch.nn.functional as F
 import ipdb
-from src.evaluation import validate, eval_transfer_ensemble_v2, eval_transfer
+from src.evaluation import validate, eval_transfer_ensemble_v3, eval_transfer
 from src.align import align_feature_space
 from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss, SymmetricKL
 
@@ -266,10 +266,14 @@ def main_worker(gpu, ngpus_per_node, args):
         # test_loader_random_1k contains 1000 randomly selected samples from
         # the test set. The random seed is fixed to 27 to ensure the same random
         # data is used during evaluations.
-        test_loader_random_1k, val_sampler = load_imagenet_test_1k(batch_size=32,
-                                                                   workers=0,
-                                                                   selection='random',
-                                                                   distributed=args.distributed)
+        # test_loader_random_1k, val_sampler = load_imagenet_test_1k(batch_size=32,
+                                                                   # workers=0,
+                                                                   # selection='random',
+                                                                   # distributed=args.distributed)
+        from src.utils_dataset import load_imagenet_test_shuffle
+        test_loader_random_1k, val_sampler = load_imagenet_test_shuffle(batch_size=32,
+                                                                        workers=0,
+                                                                        distributed=args.distributed)
     else:
         test_loader_random_1k = test_loader
 
@@ -304,7 +308,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 dist.barrier()
                 if args.dataset == 'imagenet':
                     val_sampler.set_epoch(27)
-            acc1_source2target = eval_transfer_ensemble_v2(test_loader_random_1k,
+            acc1_source2target = eval_transfer_ensemble_v3(test_loader_random_1k,
                                                         model_a=target_model,
                                                         ensemble=ensemble,
                                                         args=args,

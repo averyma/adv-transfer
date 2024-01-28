@@ -179,3 +179,38 @@ def load_imagenet_test_1k(batch_size=128, workers=4, selection='random', distrib
         num_workers=workers, pin_memory=True, sampler=val_sampler)
 
     return test_loader, val_sampler
+
+
+def load_imagenet_test_shuffle(batch_size=128, workers=4, distributed=False):
+    '''
+    this is the loader used for cvpr results: entire test set
+    '''
+
+    # default augmentation
+    # mean/std obtained from: https://github.com/pytorch/examples/blob/97304e232807082c2e7b54c597615dc0ad8f6173/imagenet/main.py#L197-L198
+    # detail: https://discuss.pytorch.org/t/normalization-in-the-mnist-example/457/7
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+
+    transform_test = transforms.Compose([
+        transforms.Resize(256, interpolation=Image.BICUBIC),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std)
+    ])
+    
+    # load dataset
+    dataroot = '/scratch/ssd002/datasets/imagenet'
+    valdir = os.path.join(dataroot, 'val')
+    data_test = datasets.ImageFolder(valdir,transform_test)
+
+    if distributed:
+        val_sampler = torch.utils.data.distributed.DistributedSampler(data_test)
+    else:
+        val_sampler = torch.utils.data.RandomSampler(data_test)
+
+    test_loader = torch.utils.data.DataLoader(
+        data_test, batch_size=batch_size, shuffle=(val_sampler is None),
+        num_workers=workers, pin_memory=True, sampler=val_sampler)
+
+    return test_loader, val_sampler

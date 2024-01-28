@@ -516,6 +516,10 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
     return top1_b2a.avg
 
 def eval_transfer_ensemble(val_loader, model_a, ensemble, args, is_main_task):
+    '''
+    Within 1000 randomly selected imagenet data, evaluation based on correctly classified samples
+    based on all models involved. Actual evaled data can be less than 1000
+    '''
     if args.dataset == 'imagenet':
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
@@ -611,6 +615,11 @@ def eval_transfer_ensemble(val_loader, model_a, ensemble, args, is_main_task):
     return top1_b2a.avg
 
 def eval_transfer_ensemble_v2(val_loader, model_a, ensemble, args, is_main_task):
+    '''
+    Within 1000 randomly selected imagenet data, evaluation based on correctly classified samples, 
+    and the adv perturbations must lead to misclassification for their originating models.
+    Actual evaled data can be less than 1000
+    '''
     if args.dataset == 'imagenet':
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
@@ -703,6 +712,119 @@ def eval_transfer_ensemble_v2(val_loader, model_a, ensemble, args, is_main_task)
 
         # if total_qualified.sum > (num_eval/args.ngpus_per_node):
             # break
+        if args.debug:
+            break
+
+    if args.distributed:
+        top1_b2a.all_reduce()
+        top5_b2a.all_reduce()
+        total_qualified.all_reduce()
+
+    if is_main_task:
+        progress.display_summary()
+
+    return top1_b2a.avg
+
+def eval_transfer_ensemble_v3(val_loader, model_a, ensemble, args, is_main_task):
+    '''
+    Within entire imagenet test data, evaluation based on correctly classified samples, 
+    and the adv perturbations must lead to misclassification for their originating models.
+    We will exhaust all testset images to find the qualified examples, it should be closer
+    to 1000 compared to v1 and v2.
+    '''
+    if args.dataset == 'imagenet':
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+    elif args.dataset == 'cifar10':
+        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+        std = [x / 255 for x in [63.0, 62.1, 66.7]]
+    elif args.dataset == 'cifar100':
+        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
+        std = [x / 255 for x in [68.2, 65.4, 70.4]]
+
+    param = {'ord': np.inf,
+             'epsilon': args.pgd_eps,
+             'alpha': args.pgd_alpha,
+             'num_iter': args.pgd_itr,
+             'restarts': 1,
+             'rand_init': True,
+             'clip': True,
+             'loss_fn': nn.CrossEntropyLoss(),
+             'dataset': 'imagenet'}
+    attacker_ensemble = pgd_ensemble(**param)
+    attacker = pgd(**param)
+
+    def run_validate_one_iteration(images, target):
+        end = time.time()
+        if args.gpu is not None and torch.cuda.is_available():
+            images = images.cuda(args.gpu, non_blocking=True)
+        if torch.backends.mps.is_available():
+            images = images.to('mps')
+            target = target.to('mps')
+        if torch.cuda.is_available():
+            target = target.cuda(args.gpu, non_blocking=True)
+
+        # compute output
+        with torch.no_grad():
+            p_clean = model_a(images).unsqueeze(2)
+
+        with ctx_noparamgrad_and_eval(model_a):
+            delta = attacker.generate(model_a, images, target)
+        p_adv = model_a(images+delta).unsqueeze(2)
+
+        for model in ensemble:
+            with torch.no_grad():
+                p_clean = torch.cat([p_clean, model(images).unsqueeze(2)], dim=2)
+            with ctx_noparamgrad_and_eval(model):
+                delta = attacker.generate(model, images, target)
+            p_adv = torch.cat([p_adv, model(images+delta).unsqueeze(2)], dim=2)
+
+        qualified = return_qualified_ensemble_v2(p_clean, p_adv, target)
+
+        images, target = images[qualified, ::], target[qualified]
+
+        with ctx_noparamgrad_and_eval(ensemble):
+            delta_ensemble = attacker_ensemble.generate(ensemble, images, target)
+
+        # measure accuracy and record loss
+        num_qualified = qualified.sum().item()
+        p_b2a = model_a(images + delta_ensemble)
+
+        acc1_b2a, acc5_b2a = accuracy(p_b2a, target, topk=(1, 5))
+
+        top1_b2a.update(acc1_b2a[0], num_qualified)
+        top5_b2a.update(acc5_b2a[0], num_qualified)
+        total_qualified.update(num_qualified)
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
+    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
+    progress = ProgressMeter(
+        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        [batch_time, top1_b2a, total_qualified],
+        prefix='Transfer: ')
+
+    # switch to evaluate mode
+    model_a.eval()
+    ensemble.eval()
+
+    for i, (images, target) in enumerate(val_loader):
+        run_validate_one_iteration(images, target)
+
+        if (i % args.print_freq == 0 and is_main_task) or args.debug:
+            progress.display(i + 1)
+
+        # if args.distributed:
+            # total_qualified.all_reduce()
+
+        if total_qualified.sum > (1000/args.ngpus_per_node):
+            break
+
         if args.debug:
             break
 
