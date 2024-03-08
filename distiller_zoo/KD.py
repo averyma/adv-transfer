@@ -17,11 +17,11 @@ import torch.nn.functional as F
 
 class DistillKL(nn.Module):
     """Distilling the Knowledge in a Neural Network"""
-    def __init__(self, T, reduction='average'):
+    def __init__(self, T, reduction='avg'):
         super(DistillKL, self).__init__()
         self.T = T
         self.reduction = reduction
-        assert reduction in ['average', 'max', 'min']
+        assert reduction in ['avg', 'max', 'min']
 
     def forward(self, y_s, y_t):
         p_s = F.log_softmax(y_s/self.T, dim=1)
@@ -30,7 +30,7 @@ class DistillKL(nn.Module):
         loss_per_dim_per_sample_per_model = F.kl_div(p_s, p_t, reduction='none') * (self.T**2)
         loss_per_sample_per_model = loss_per_dim_per_sample_per_model.sum(dim=2)
 
-        if self.reduction == 'average':
+        if self.reduction == 'avg':
             # take the average over models:
             loss_per_sample = loss_per_sample_per_model.mean(dim=0)
         elif self.reduction == 'max':
