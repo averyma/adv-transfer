@@ -10,6 +10,7 @@ from src.utils_log import Summary, AverageMeter, ProgressMeter
 import time
 from torch.utils.data import Subset
 import torchattacks
+from models.ensemble import EnsembleTwo, EnsembleFour
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
@@ -48,20 +49,7 @@ def return_qualified(p_0, p_1, p_adv_0, p_adv_1, target):
 
         return qualified
 
-def return_qualified_ensemble(p_clean, target):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
-    '''
-    A given input is qualified if it can be correctly classified by all models
-    '''
-    qualified = torch.ones(p_clean.size(0), device=p_clean.device)
-    with torch.no_grad():
-        for i in range(p_clean.size(2)):
-            pred = p_clean[:, :, i].topk(1, 1, True, True)[1].t()
-            correct = pred.eq(target.view(1, -1).expand_as(pred)).squeeze()
-            qualified *= correct
-    return qualified == 1.
-
-def return_qualified_ensemble_v2(p_clean, p_adv, target):
+def return_qualified_ensemble(p_clean, p_adv, target):
     """Computes the accuracy over the k top predictions for the specified values of k"""
     '''
     A given input is qualified if it can be correctly classified by all models
@@ -80,33 +68,7 @@ def return_qualified_ensemble_v2(p_clean, p_adv, target):
 
 def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
     if whitebox:
-        if args.dataset == 'imagenet':
-            mean = [0.485, 0.456, 0.406]
-            std = [0.229, 0.224, 0.225]
-        elif args.dataset == 'cifar10':
-            mean = [x / 255 for x in [125.3, 123.0, 113.9]]
-            std = [x / 255 for x in [63.0, 62.1, 66.7]]
-        elif args.dataset == 'cifar100':
-            mean = [x / 255 for x in [129.3, 124.1, 112.4]]
-            std = [x / 255 for x in [68.2, 65.4, 70.4]]
-        # param = {'ord': np.inf,
-              # 'epsilon': args.pgd_eps,
-              # 'alpha': args.pgd_alpha,
-              # 'num_iter': args.pgd_itr,
-              # 'restarts': 1,
-              # 'rand_init': True,
-              # 'clip': True,
-              # 'loss_fn': nn.CrossEntropyLoss(),
-              # 'dataset': args.dataset}
-        # param['num_iter'] = 1 if args.debug else args.pgd_itr
-        # attacker = pgd(**param)
-        atk = torchattacks.PGD(
-            model,
-            eps=args.pgd_eps,
-            alpha=args.pgd_alpha,
-            steps=1 if args.debug else args.pgd_itr,
-            random_start=True)
-        atk.set_normalization_used(mean=mean, std=std)
+        atk = get_attack(args.dataset, args.atk, model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
 
     def run_validate(loader, base_progress=0):
         end = time.time()
@@ -122,7 +84,6 @@ def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
 
             if whitebox:
                 with ctx_noparamgrad_and_eval(model):
-                    # delta = attacker.generate(model, images, target)
                     delta = atk(images, target) - images
             else:
                 delta = 0
@@ -154,7 +115,7 @@ def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
     progress = ProgressMeter(
         len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
         [batch_time, losses, top1, top5],
-        prefix='Test: ')
+        prefix='Test: ' if not whitebox else 'Whitebox: ')
 
     # switch to evaluate mode
     model.eval()
@@ -177,257 +138,54 @@ def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
 
     return top1.avg, top5.avg
 
-def eval_transfer(val_loader, model_a, model_b, args, is_main_task):
-    if args.dataset == 'imagenet':
+def get_attack(dataset, atk_method, model, eps, alpha, steps, random=True):
+    if dataset == 'imagenet':
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
-    elif args.dataset == 'cifar10':
+    elif dataset == 'cifar10':
         mean = [x / 255 for x in [125.3, 123.0, 113.9]]
         std = [x / 255 for x in [63.0, 62.1, 66.7]]
-    elif args.dataset == 'cifar100':
+    elif dataset == 'cifar100':
         mean = [x / 255 for x in [129.3, 124.1, 112.4]]
         std = [x / 255 for x in [68.2, 65.4, 70.4]]
 
-    atk_a = torchattacks.PGD(
-        model_a,
-        eps=args.pgd_eps,
-        alpha=args.pgd_alpha,
-        steps=1 if args.debug else args.pgd_itr,
-        random_start=True)
-    atk_a.set_normalization_used(mean=mean, std=std)
-
-    atk_b = torchattacks.PGD(
-        model_b,
-        eps=args.pgd_eps,
-        alpha=args.pgd_alpha,
-        steps=1 if args.debug else args.pgd_itr,
-        random_start=True)
-    atk_b.set_normalization_used(mean=mean, std=std)
-
-    def run_validate_one_iteration(images, target):
-        end = time.time()
-        if args.gpu is not None and torch.cuda.is_available():
-            images = images.cuda(args.gpu, non_blocking=True)
-        if torch.backends.mps.is_available():
-            images = images.to('mps')
-            target = target.to('mps')
-        if torch.cuda.is_available():
-            target = target.cuda(args.gpu, non_blocking=True)
-
-        with ctx_noparamgrad_and_eval(model_a):
-            delta_a = atk_a(images, target) - images
-
-        with ctx_noparamgrad_and_eval(model_b):
-            delta_b = atk_b(images, target) - images
-
-        # compute output
-        with torch.no_grad():
-            p_a = model_a(images)
-            p_b = model_b(images)
-            p_adv_a = model_a(images+delta_a)
-            p_adv_b = model_b(images+delta_b)
-            qualified = return_qualified(p_a, p_b, p_adv_a, p_adv_b, target)
-
-        # measure accuracy and record loss
-        num_qualified = qualified.sum().item()
-        p_b2a = model_a((images+delta_b)[qualified, ::])
-        p_a2b = model_b((images+delta_a)[qualified, ::])
-
-        acc1_b2a, acc5_b2a = accuracy(p_b2a, target[qualified], topk=(1, 5))
-        acc1_a2b, acc5_a2b = accuracy(p_a2b, target[qualified], topk=(1, 5))
-
-        top1_b2a.update(acc1_b2a[0], num_qualified)
-        top5_b2a.update(acc5_b2a[0], num_qualified)
-        top1_a2b.update(acc1_a2b[0], num_qualified)
-        top5_a2b.update(acc5_a2b[0], num_qualified)
-        total_qualified.update(num_qualified)
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
-    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-    top1_a2b = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
-    top5_a2b = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
-    total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
-    progress = ProgressMeter(
-        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
-        [batch_time, top1_b2a, total_qualified],
-        prefix='Transfer: ')
-
-    # switch to evaluate mode
-    model_a.eval()
-    model_b.eval()
-
-    for i, (images, target) in enumerate(val_loader):
-        run_validate_one_iteration(images, target)
-
-        if (i % args.print_freq == 0 and is_main_task) or args.debug:
-            progress.display(i + 1)
-
-        # if args.distributed:
-            # total_qualified.all_reduce()
-
-        # if total_qualified.sum > (num_eval/args.ngpus_per_node):
-            # break
-        if args.debug:
-            break
-
-    if args.distributed:
-        top1_b2a.all_reduce()
-        top1_a2b.all_reduce()
-        top5_b2a.all_reduce()
-        top5_a2b.all_reduce()
-        total_qualified.all_reduce()
-
-    if is_main_task:
-        progress.display_summary()
-
-    return top1_a2b.avg, top1_b2a.avg
-
-def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_main_task):
-    if args.dataset == 'imagenet':
-        mean = [0.485, 0.456, 0.406]
-        std = [0.229, 0.224, 0.225]
-    elif args.dataset == 'cifar10':
-        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
-        std = [x / 255 for x in [63.0, 62.1, 66.7]]
-    elif args.dataset == 'cifar100':
-        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
-        std = [x / 255 for x in [68.2, 65.4, 70.4]]
-
-    if args.debug:
-        steps = 1
-        eps = 4/255
-        alpha = 1/255
-        num_eval = 100
-    else:
-        if atk_method.endswith('strong'):
-            steps = 40
-            eps = 8/255
-            alpha = 2/255
-        else:
-            steps = 20
-            eps = 4/255
-            alpha = 1/255
-        num_eval = 1000
-
-    if atk_method.startswith('linbp'):
-        param = {'ord': np.inf,
-                 'epsilon': eps,
-                 'alpha': alpha,
-                 'num_iter': steps,
-                 'restarts': 1,
-                 'rand_init': True,
-                 'clip': True,
-                 'loss_fn': nn.CrossEntropyLoss(),
+    if atk_method == 'pgd':
+        attack = torchattacks.PGD(model, eps=eps, alpha=alpha, steps=steps, random_start=random)
+    elif atk_method == 'mi':
+        attack = torchattacks.MIFGSM(model, eps=eps, alpha=alpha, steps=steps)
+    elif atk_method == 'ni':
+        attack = torchattacks.NIFGSM(model, eps=eps, alpha=alpha, steps=steps)
+    elif atk_method == 'vni':
+        attack = torchattacks.VNIFGSM(model, eps=eps, alpha=alpha, steps=steps)
+    elif atk_method == 'vmi':
+        attack = torchattacks.VMIFGSM(model, eps=eps, alpha=alpha, steps=steps)
+    elif atk_method == 'sini':
+        attack = torchattacks.SINIFGSM(model, eps=eps, alpha=alpha, steps=steps)
+    elif atk_method == 'ti':
+        attack = torchattacks.TIFGSM(model, eps=eps, alpha=alpha, steps=steps)
+    elif atk_method == 'di':
+        attack = torchattacks.DIFGSM(model, eps=eps, alpha=alpha, steps=steps)
+    elif atk_method == 'linbp':
+        param = {'ord': np.inf, 'epsilon': eps, 'alpha': alpha, 'num_iter': steps,
+                 'restarts': 1, 'rand_init': True, 'clip': True, 'loss_fn': nn.CrossEntropyLoss(),
                  'dataset': 'imagenet'}
-        attacker = pgd_linbp(**param)
+        attack = pgd_linbp(**param)
+
+    if atk_method != 'linbp':
+        attack.set_normalization_used(mean=mean, std=std)
+        attack.set_normalization_used(mean=mean, std=std)
+    return attack
+
+def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
+    # Define total number of qualified samples to be evaluated
+    num_eval = 100 if args.debug else 1000
+
+    if args.atk == 'linbp':
+        atk = get_attack(args.dataset, args.atk, source_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
     else:
-        if atk_method.startswith('pgd'):
+        atk_source = get_attack(args.dataset, args.atk, source_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
 
-            atk_a = torchattacks.PGD(
-                model_a,
-                eps=eps,
-                alpha=alpha,
-                steps=steps,
-                random_start=True)
-
-            atk_b = torchattacks.PGD(
-                model_b,
-                eps=eps,
-                alpha=alpha,
-                steps=steps,
-                random_start=True)
-        elif atk_method.startswith('mi'):
-            atk_a = torchattacks.MIFGSM(
-                model_a,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-
-            atk_b = torchattacks.MIFGSM(
-                model_b,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-        elif atk_method.startswith('ni'):
-            atk_a = torchattacks.NIFGSM(
-                model_a,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-
-            atk_b = torchattacks.NIFGSM(
-                model_b,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-        elif atk_method.startswith('vni'):
-            atk_a = torchattacks.VNIFGSM(
-                model_a,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-
-            atk_b = torchattacks.VNIFGSM(
-                model_b,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-        elif atk_method.startswith('vmi'):
-            atk_a = torchattacks.VMIFGSM(
-                model_a,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-
-            atk_b = torchattacks.VMIFGSM(
-                model_b,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-        elif atk_method.startswith('sini'):
-            atk_a = torchattacks.SINIFGSM(
-                model_a,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-
-            atk_b = torchattacks.SINIFGSM(
-                model_b,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-        elif atk_method.startswith('ti'):
-            atk_a = torchattacks.TIFGSM(
-                model_a,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-
-            atk_b = torchattacks.TIFGSM(
-                model_b,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-        elif atk_method.startswith('di'):
-            atk_a = torchattacks.DIFGSM(
-                model_a,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-
-            atk_b = torchattacks.DIFGSM(
-                model_b,
-                eps=eps,
-                alpha=alpha,
-                steps=steps)
-
-        atk_a.set_normalization_used(mean=mean, std=std)
-        atk_b.set_normalization_used(mean=mean, std=std)
+        atk_target = get_attack(args.dataset, args.atk, target_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
 
     def run_validate_one_iteration(images, target):
         end = time.time()
@@ -439,38 +197,30 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
         if torch.cuda.is_available():
             target = target.cuda(args.gpu, non_blocking=True)
 
-        with ctx_noparamgrad_and_eval(model_a):
-            if atk_method.startswith('linbp'):
-                delta_a = attacker.generate(model_a, images, target)
+        with ctx_noparamgrad_and_eval(source_model) and ctx_noparamgrad_and_eval(target_model):
+            if args.atk == 'linbp':
+                delta_source = atk.generate(source_model, images, target)
+                delta_target = atk.generate(target_model, images, target)
             else:
-                delta_a = atk_a(images, target) - images
-
-        with ctx_noparamgrad_and_eval(model_b):
-            if atk_method.startswith('linbp'):
-                delta_b = attacker.generate(model_b, images, target)
-            else:
-                delta_b = atk_b(images, target) - images
+                delta_source = atk_source(images, target) - images
+                delta_target = atk_target(images, target) - images
 
         # compute output
         with torch.no_grad():
-            p_a = model_a(images)
-            p_b = model_b(images)
-            p_adv_a = model_a(images+delta_a)
-            p_adv_b = model_b(images+delta_b)
-            qualified = return_qualified(p_a, p_b, p_adv_a, p_adv_b, target)
+            p_source = source_model(images)
+            p_target = target_model(images)
+            p_adv_source = source_model(images+delta_source)
+            p_adv_target = target_model(images+delta_target)
+            qualified = return_qualified(p_source, p_target, p_adv_source, p_adv_target, target)
 
         # measure accuracy and record loss
         num_qualified = qualified.sum().item()
-        p_b2a = model_a((images+delta_b)[qualified, ::])
-        p_a2b = model_b((images+delta_a)[qualified, ::])
+        p_source2target = target_model((images+delta_source)[qualified, ::])
 
-        acc1_b2a, acc5_b2a = accuracy(p_b2a, target[qualified], topk=(1, 5))
-        acc1_a2b, acc5_a2b = accuracy(p_a2b, target[qualified], topk=(1, 5))
+        acc1, acc5 = accuracy(p_source2target, target[qualified], topk=(1, 5))
 
-        top1_b2a.update(acc1_b2a[0], num_qualified)
-        top5_b2a.update(acc5_b2a[0], num_qualified)
-        top1_a2b.update(acc1_a2b[0], num_qualified)
-        top5_a2b.update(acc5_a2b[0], num_qualified)
+        top1.update(acc1[0], num_qualified)
+        top5.update(acc5[0], num_qualified)
         total_qualified.update(num_qualified)
 
         # measure elapsed time
@@ -478,19 +228,17 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
         end = time.time()
 
     batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
-    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-    top1_a2b = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
-    top5_a2b = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
     total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
     progress = ProgressMeter(
         len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
-        [batch_time, top1_a2b, top1_b2a, total_qualified],
-        prefix='Transfer: ')
+        [batch_time, top1, top5, total_qualified],
+        prefix='Transfer({}): '.format(args.atk))
 
     # switch to evaluate mode
-    model_a.eval()
-    model_b.eval()
+    source_model.eval()
+    target_model.eval()
 
     for i, (images, target) in enumerate(val_loader):
         run_validate_one_iteration(images, target)
@@ -505,254 +253,31 @@ def eval_transfer_orthogonal(val_loader, model_a, model_b, args, atk_method, is_
             break
 
     if args.distributed:
-        top1_b2a.all_reduce()
-        top1_a2b.all_reduce()
-        top5_b2a.all_reduce()
-        top5_a2b.all_reduce()
+        top1.all_reduce()
+        top5.all_reduce()
 
     if is_main_task:
         progress.display_summary()
 
-    return top1_b2a.avg
+    return top1.avg
 
-def eval_transfer_ensemble(val_loader, model_a, ensemble, args, is_main_task):
+def eval_transfer_ensemble(val_loader, source_ensemble, target_model, args, is_main_task):
     '''
-    Within 1000 randomly selected imagenet data, evaluation based on correctly classified samples
-    based on all models involved. Actual evaled data can be less than 1000
-    '''
-    if args.dataset == 'imagenet':
-        mean = [0.485, 0.456, 0.406]
-        std = [0.229, 0.224, 0.225]
-    elif args.dataset == 'cifar10':
-        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
-        std = [x / 255 for x in [63.0, 62.1, 66.7]]
-    elif args.dataset == 'cifar100':
-        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
-        std = [x / 255 for x in [68.2, 65.4, 70.4]]
-
-    param = {'ord': np.inf,
-             'epsilon': args.pgd_eps,
-             'alpha': args.pgd_alpha,
-             'num_iter': args.pgd_itr,
-             'restarts': 1,
-             'rand_init': True,
-             'clip': True,
-             'loss_fn': nn.CrossEntropyLoss(),
-             'dataset': 'imagenet'}
-    attacker = pgd_ensemble(**param)
-
-    def run_validate_one_iteration(images, target):
-        end = time.time()
-        if args.gpu is not None and torch.cuda.is_available():
-            images = images.cuda(args.gpu, non_blocking=True)
-        if torch.backends.mps.is_available():
-            images = images.to('mps')
-            target = target.to('mps')
-        if torch.cuda.is_available():
-            target = target.cuda(args.gpu, non_blocking=True)
-
-        # compute output
-        with torch.no_grad():
-            p_clean = model_a(images).unsqueeze(2)
-            for model in ensemble:
-                p_clean = torch.cat([p_clean, model(images).unsqueeze(2)], dim=2)
-        qualified = return_qualified_ensemble(p_clean, target)
-
-        images, target = images[qualified, ::], target[qualified]
-
-        with ctx_noparamgrad_and_eval(ensemble):
-            delta = attacker.generate(ensemble, images, target)
-
-        # measure accuracy and record loss
-        num_qualified = qualified.sum().item()
-        p_b2a = model_a((images + delta))
-
-        acc1_b2a, acc5_b2a = accuracy(p_b2a, target, topk=(1, 5))
-
-        top1_b2a.update(acc1_b2a[0], num_qualified)
-        top5_b2a.update(acc5_b2a[0], num_qualified)
-        total_qualified.update(num_qualified)
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
-    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
-    total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
-    progress = ProgressMeter(
-        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
-        [batch_time, top1_b2a, total_qualified],
-        prefix='Transfer: ')
-
-    # switch to evaluate mode
-    model_a.eval()
-    ensemble.eval()
-
-    for i, (images, target) in enumerate(val_loader):
-        run_validate_one_iteration(images, target)
-
-        if (i % args.print_freq == 0 and is_main_task) or args.debug:
-            progress.display(i + 1)
-
-        # if args.distributed:
-            # total_qualified.all_reduce()
-
-        # if total_qualified.sum > (num_eval/args.ngpus_per_node):
-            # break
-        if args.debug:
-            break
-
-    if args.distributed:
-        top1_b2a.all_reduce()
-        top5_b2a.all_reduce()
-        total_qualified.all_reduce()
-
-    if is_main_task:
-        progress.display_summary()
-
-    return top1_b2a.avg
-
-def eval_transfer_ensemble_v2(val_loader, model_a, ensemble, args, is_main_task):
-    '''
-    Within 1000 randomly selected imagenet data, evaluation based on correctly classified samples, 
-    and the adv perturbations must lead to misclassification for their originating models.
-    Actual evaled data can be less than 1000
-    '''
-    if args.dataset == 'imagenet':
-        mean = [0.485, 0.456, 0.406]
-        std = [0.229, 0.224, 0.225]
-    elif args.dataset == 'cifar10':
-        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
-        std = [x / 255 for x in [63.0, 62.1, 66.7]]
-    elif args.dataset == 'cifar100':
-        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
-        std = [x / 255 for x in [68.2, 65.4, 70.4]]
-
-    param = {'ord': np.inf,
-             'epsilon': args.pgd_eps,
-             'alpha': args.pgd_alpha,
-             'num_iter': args.pgd_itr,
-             'restarts': 1,
-             'rand_init': True,
-             'clip': True,
-             'loss_fn': nn.CrossEntropyLoss(),
-             'dataset': 'imagenet'}
-    attacker_ensemble = pgd_ensemble(**param)
-    attacker = pgd(**param)
-
-    def run_validate_one_iteration(images, target):
-        end = time.time()
-        if args.gpu is not None and torch.cuda.is_available():
-            images = images.cuda(args.gpu, non_blocking=True)
-        if torch.backends.mps.is_available():
-            images = images.to('mps')
-            target = target.to('mps')
-        if torch.cuda.is_available():
-            target = target.cuda(args.gpu, non_blocking=True)
-
-        # compute output
-        with torch.no_grad():
-            p_clean = model_a(images).unsqueeze(2)
-
-        with ctx_noparamgrad_and_eval(model_a):
-            delta = attacker.generate(model_a, images, target)
-        p_adv = model_a(images+delta).unsqueeze(2)
-
-        for model in ensemble:
-            with torch.no_grad():
-                p_clean = torch.cat([p_clean, model(images).unsqueeze(2)], dim=2)
-            with ctx_noparamgrad_and_eval(model):
-                delta = attacker.generate(model, images, target)
-            p_adv = torch.cat([p_adv, model(images+delta).unsqueeze(2)], dim=2)
-
-        qualified = return_qualified_ensemble_v2(p_clean, p_adv, target)
-
-        images, target = images[qualified, ::], target[qualified]
-
-        with ctx_noparamgrad_and_eval(ensemble):
-            delta_ensemble = attacker_ensemble.generate(ensemble, images, target)
-
-        # measure accuracy and record loss
-        num_qualified = qualified.sum().item()
-        p_b2a = model_a(images + delta_ensemble)
-
-        acc1_b2a, acc5_b2a = accuracy(p_b2a, target, topk=(1, 5))
-
-        top1_b2a.update(acc1_b2a[0], num_qualified)
-        top5_b2a.update(acc5_b2a[0], num_qualified)
-        total_qualified.update(num_qualified)
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
-    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
-    total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
-    progress = ProgressMeter(
-        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
-        [batch_time, top1_b2a, total_qualified],
-        prefix='Transfer: ')
-
-    # switch to evaluate mode
-    model_a.eval()
-    ensemble.eval()
-
-    for i, (images, target) in enumerate(val_loader):
-        run_validate_one_iteration(images, target)
-
-        if (i % args.print_freq == 0 and is_main_task) or args.debug:
-            progress.display(i + 1)
-
-        # if args.distributed:
-            # total_qualified.all_reduce()
-
-        # if total_qualified.sum > (num_eval/args.ngpus_per_node):
-            # break
-        if args.debug:
-            break
-
-    if args.distributed:
-        top1_b2a.all_reduce()
-        top5_b2a.all_reduce()
-        total_qualified.all_reduce()
-
-    if is_main_task:
-        progress.display_summary()
-
-    return top1_b2a.avg
-
-def eval_transfer_ensemble_v3(val_loader, model_a, ensemble, args, is_main_task):
-    '''
-    Within entire imagenet test data, evaluation based on correctly classified samples, 
+    Within entire imagenet test data, evaluation based on correctly classified samples,
     and the adv perturbations must lead to misclassification for their originating models.
     We will exhaust all testset images to find the qualified examples, it should be closer
     to 1000 compared to v1 and v2.
     '''
-    if args.dataset == 'imagenet':
-        mean = [0.485, 0.456, 0.406]
-        std = [0.229, 0.224, 0.225]
-    elif args.dataset == 'cifar10':
-        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
-        std = [x / 255 for x in [63.0, 62.1, 66.7]]
-    elif args.dataset == 'cifar100':
-        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
-        std = [x / 255 for x in [68.2, 65.4, 70.4]]
+    num_eval = 100 if args.debug else 1000
 
-    param = {'ord': np.inf,
-             'epsilon': args.pgd_eps,
-             'alpha': args.pgd_alpha,
-             'num_iter': args.pgd_itr,
-             'restarts': 1,
-             'rand_init': True,
-             'clip': True,
-             'loss_fn': nn.CrossEntropyLoss(),
-             'dataset': 'imagenet'}
-    attacker_ensemble = pgd_ensemble(**param)
-    attacker = pgd(**param)
+    if len(source_ensemble) == 2:
+        ensemble_model = EnsembleTwo(source_ensemble[0], source_ensemble[1])
+    else:
+        ensemble_model = EnsembleFour(source_ensemble[0], source_ensemble[1], source_ensemble[2], source_ensemble[3])
+
+    atk_ensemble = get_attack(args.dataset, args.atk, ensemble_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
+
+    atk_target = get_attack(args.dataset, args.atk, target_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
 
     def run_validate_one_iteration(images, target):
         end = time.time()
@@ -764,36 +289,37 @@ def eval_transfer_ensemble_v3(val_loader, model_a, ensemble, args, is_main_task)
         if torch.cuda.is_available():
             target = target.cuda(args.gpu, non_blocking=True)
 
+
         # compute output
         with torch.no_grad():
-            p_clean = model_a(images).unsqueeze(2)
+            p_clean = target_model(images).unsqueeze(2)
 
-        with ctx_noparamgrad_and_eval(model_a):
-            delta = attacker.generate(model_a, images, target)
-        p_adv = model_a(images+delta).unsqueeze(2)
+        with ctx_noparamgrad_and_eval(target_model):
+            delta_target = atk_target(images, target) - images
+        p_adv = target_model(images+delta_target).unsqueeze(2)
 
-        for model in ensemble:
+        for model in source_ensemble:
             with torch.no_grad():
                 p_clean = torch.cat([p_clean, model(images).unsqueeze(2)], dim=2)
             with ctx_noparamgrad_and_eval(model):
-                delta = attacker.generate(model, images, target)
+                atk_model = get_attack(args.dataset, args.atk, model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
+                delta = atk_model(images, target) - images
             p_adv = torch.cat([p_adv, model(images+delta).unsqueeze(2)], dim=2)
 
-        qualified = return_qualified_ensemble_v2(p_clean, p_adv, target)
+        qualified = return_qualified_ensemble(p_clean, p_adv, target)
 
         images, target = images[qualified, ::], target[qualified]
 
-        with ctx_noparamgrad_and_eval(ensemble):
-            delta_ensemble = attacker_ensemble.generate(ensemble, images, target)
+        with ctx_noparamgrad_and_eval(ensemble_model):
+            delta_ensemble = atk_ensemble(images, target) - images
 
         # measure accuracy and record loss
         num_qualified = qualified.sum().item()
-        p_b2a = model_a(images + delta_ensemble)
+        p_b2a = target_model(images + delta_ensemble)
 
         acc1_b2a, acc5_b2a = accuracy(p_b2a, target, topk=(1, 5))
 
-        top1_b2a.update(acc1_b2a[0], num_qualified)
-        top5_b2a.update(acc5_b2a[0], num_qualified)
+        top1.update(acc1_b2a[0], num_qualified)
         total_qualified.update(num_qualified)
 
         # measure elapsed time
@@ -801,17 +327,16 @@ def eval_transfer_ensemble_v3(val_loader, model_a, ensemble, args, is_main_task)
         end = time.time()
 
     batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
-    top1_b2a = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-    top5_b2a = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
     total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
     progress = ProgressMeter(
         len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
-        [batch_time, top1_b2a, total_qualified],
+        [batch_time, top1, total_qualified],
         prefix='Transfer: ')
 
     # switch to evaluate mode
-    model_a.eval()
-    ensemble.eval()
+    target_model.eval()
+    source_ensemble.eval()
 
     for i, (images, target) in enumerate(val_loader):
         run_validate_one_iteration(images, target)
@@ -819,8 +344,8 @@ def eval_transfer_ensemble_v3(val_loader, model_a, ensemble, args, is_main_task)
         if (i % args.print_freq == 0 and is_main_task) or args.debug:
             progress.display(i + 1)
 
-        # if args.distributed:
-            # total_qualified.all_reduce()
+        if args.distributed:
+            total_qualified.all_reduce()
 
         if total_qualified.sum > (1000/args.ngpus_per_node):
             break
@@ -829,12 +354,10 @@ def eval_transfer_ensemble_v3(val_loader, model_a, ensemble, args, is_main_task)
             break
 
     if args.distributed:
-        top1_b2a.all_reduce()
-        top5_b2a.all_reduce()
-        total_qualified.all_reduce()
+        top1.all_reduce()
 
     if is_main_task:
         progress.display_summary()
 
-    return top1_b2a.avg
+    return top1.avg
 

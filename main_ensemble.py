@@ -10,6 +10,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torchvision.models
+from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Subset
@@ -18,7 +19,7 @@ import numpy as np
 
 from src.args import get_args, print_args, get_base_model_dir
 
-from src.utils_dataset import load_dataset, load_imagenet_test_1k
+from src.utils_dataset import load_dataset, load_imagenet_test_shuffle
 from src.utils_log import metaLogger, rotateCheckpoint, wandbLogger, saveModel, delCheckpoint
 from src.utils_general import seed_everything, get_model, get_optim, remove_module
 from src.transforms import get_mixup_cutmix
@@ -27,7 +28,7 @@ from src.attacks import pgd
 from src.context import ctx_noparamgrad_and_eval
 import torch.nn.functional as F
 import ipdb
-from src.evaluation import validate, eval_transfer_ensemble_v3, eval_transfer
+from src.evaluation import validate, eval_transfer_ensemble, eval_transfer
 from src.align import align_feature_space
 from distiller_zoo import RKDLoss, EGA, PKT, DistillKL, HintLoss, NCELoss, SymmetricKL
 
@@ -90,42 +91,41 @@ def main_worker(gpu, ngpus_per_node, args):
             args.rank = args.rank * ngpus_per_node + gpu
         ddp_setup(args.dist_backend, args.dist_url, args.rank, args.world_size)
         dist.barrier()
-    '''
-    For Imagenet: available seeds: 40 ~ 42
-        source model:  seed 40
-        target model:  seed 41
-        witness model: seed 42
-    For CIFAR10/100: available seeds: 40 ~ 48
-        source model:  seed 40
-        target model:  seed 41
-        witness model: seed 42
-    '''
-    if args.dataset.startswith('cifar'):
-        list_target_arch = ['preactresnet18', 'preactresnet50', 'vgg19', 'vit_small']
+
+    # Set the indices for source, witness, and target models
+    if args.debug:
+        # list_target_arch = ['resnet18']
+        list_target_arch = ['resnet18', 'resnet50', 'resnet101',
+                            'densenet121', 'inception_v3', 'vgg19_bn',
+                            'swin_t', 'swin_s',
+                            'vit_t_16', 'vit_s_16', 'vit_b_16']
     else:
-        if args.debug:
-            list_target_arch = ['resnet18']
-        else:
-            list_target_arch = ['resnet18', 'resnet50', 'resnet101',
-                                'densenet121', 'inception_v3', 'vgg19_bn',
-                                'swin_t', 'swin_s', 'vit_t_16', 'vit_s_16', 'vit_b_16']
+        list_target_arch = ['resnet18', 'resnet50', 'resnet101',
+                            'densenet121', 'inception_v3', 'vgg19_bn',
+                            'swin_t', 'swin_s',
+                            'vit_t_16', 'vit_s_16', 'vit_b_16']
 
     base_model_dir = get_base_model_dir(
             '/h/ama/workspace/adv-transfer/options/ckpt_summary.yaml'
             )
 
     if args.source_arch == 's1':
+        # single aligned resnet50, source idx0, witness idx1, so target idx2 is fine
         ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-resnet50-W-resnet18-none-1ep-0.001-seed0/model/final_model.pt']
         ensemble_arch = ['resnet50']
     elif args.source_arch == 's2':
+        # one original resnet50 and one original renset1, both with idx0, so target idx2 is fine
         ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet18/20230726-imagenet-resnet18-256-40/model/best_model.pt']
         ensemble_arch = ['resnet50', 'resnet18']
     elif args.source_arch == 's3':
+        # for the run with seed0, source resnet50 was idx0, and the witness model(resnet18) was idx1, so when loading resnet18 as target, use witness 3
+        # for the run with seed1, source resnet50 was idx1, and the witness model(resnet18) was idx2, so when loading resnet18 as target, use witness 3
         ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-resnet50-W-resnet18-none-1ep-0.001-seed0/model/final_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/aligned/20231027-2gpu-a40-imagenet-kl-S-resnet50-W-resnet18-none-1ep-0.001-seed1/model/final_model.pt']
         ensemble_arch = ['resnet50', 'resnet50']
     elif args.source_arch == 's4':
+        # two original resnet50 and two original renset18 with idx0 and idx1, so target idx2 is fine
         ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet18/20230726-imagenet-resnet18-256-40/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-41/model/best_model.pt',
@@ -148,18 +148,20 @@ def main_worker(gpu, ngpus_per_node, args):
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_b_16/20231010-8gpu-t4v2-imagenet-vit_b_16-1024-41/model/best_model.pt',
                       '/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_t_16/20230929-8gpu-t4v2-imagenet-vit_t_16-1024-41/model/best_model.pt']
         ensemble_arch = ['vit_b_16', 'vit_t_16', 'vit_b_16', 'vit_t_16']
+
     elif args.source_arch == 's9':
-        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-40/model/best_model.pt']
-        ensemble_arch = ['resnet50']
-    elif args.source_arch == 's10':
-        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet18/20230726-imagenet-resnet18-256-40/model/best_model.pt']
-        ensemble_arch = ['resnet18']
-    elif args.source_arch == 's11':
         ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_b_16/20231010-8gpu-t4v2-imagenet-vit_b_16-1024-40/model/best_model.pt']
         ensemble_arch = ['vit_b_16']
-    elif args.source_arch == 's12':
+    elif args.source_arch == 's10':
         ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/vit_t_16/20230929-8gpu-t4v2-imagenet-vit_t_16-1024-40/model/best_model.pt']
         ensemble_arch = ['vit_t_16']
+
+    elif args.source_arch == 's11':
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet50/20230726-imagenet-resnet50-256-40/model/best_model.pt']
+        ensemble_arch = ['resnet50']
+    elif args.source_arch == 's12':
+        ensemble_dir = ['/h/ama/workspace/adv-transfer/ckpt/imagenet/resnet18/20230726-imagenet-resnet18-256-40/model/best_model.pt']
+        ensemble_arch = ['resnet18']
 
     ensemble = nn.ModuleList([])
     for _ensemble_arch, _ensemble_dir in zip(ensemble_arch, ensemble_dir):
@@ -173,7 +175,7 @@ def main_worker(gpu, ngpus_per_node, args):
         print('{}: Load source model from {}.'.format(device, _ensemble_dir))
         ensemble.append(copy.deepcopy(source_model))
 
-    result = {}
+    result = {'avg-err': 0}
     for target_arch in list_target_arch:
         result[target_arch] = None
 
@@ -231,7 +233,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if valid_checkpoint and os.path.exists(load_this_ckpt):
         ckpt = torch.load(load_this_ckpt, map_location=device)
-        result = ckpt['result']
+        # result = ckpt['result']
         print("{}: CHECKPOINT LOADED!".format(device))
         del ckpt
         torch.cuda.empty_cache()
@@ -254,30 +256,11 @@ def main_worker(gpu, ngpus_per_node, args):
             format='%(asctime)s %(message)s', level=logging.INFO)
         logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
-    # train_loader and test_loader are the original loader for imagenet
-    # train_sampler is necessary for alignment
-    # val_sampler is removed so we can use the one from test_loader_shuffle
-    # train_loader, test_loader, train_sampler, _ = load_dataset(args.dataset,
-                                                               # args.batch_size,
-                                                               # args.workers,
-                                                               # args.distributed)
+    test_loader_shuffle, val_sampler = load_imagenet_test_shuffle(batch_size=32,
+                                                        workers=0,
+                                                        distributed=args.distributed)
 
-    if args.dataset == 'imagenet':
-        # test_loader_random_1k contains 1000 randomly selected samples from
-        # the test set. The random seed is fixed to 27 to ensure the same random
-        # data is used during evaluations.
-        # test_loader_random_1k, val_sampler = load_imagenet_test_1k(batch_size=32,
-                                                                   # workers=0,
-                                                                   # selection='random',
-                                                                   # distributed=args.distributed)
-        from src.utils_dataset import load_imagenet_test_shuffle
-        test_loader_random_1k, val_sampler = load_imagenet_test_shuffle(batch_size=32,
-                                                                        workers=0,
-                                                                        distributed=args.distributed)
-    else:
-        test_loader_random_1k = test_loader
-
-    print('{}: Dataloader compelete! Ready for alignment!'.format(device))
+    # print('{}: Dataloader compelete! Ready for alignment!'.format(device))
 ##########################################################
 ###################### Training begins ###################
 ##########################################################
@@ -287,11 +270,26 @@ def main_worker(gpu, ngpus_per_node, args):
 
     for target_arch in list_target_arch:
         if result[target_arch] is None:
+            # determine target_idx
+            if args.source_arch == 's3':
+                if target_arch == 'resnet18':
+                    target_idx = 3
+                else:
+                    target_idx = 2
+            elif args.source_arch == 's7':
+                if target_arch == 'vit_t_16':
+                    target_idx = 3
+                else:
+                    target_idx = 2
+            else:
+                target_idx = 2
+
+            # Load target model
             args.arch = target_arch
             target_model = get_model(args)
             target_model_dir = os.path.join(
                 base_model_dir['root'], args.dataset, target_arch,
-                base_model_dir[args.dataset][target_arch][args.target_idx],
+                base_model_dir[args.dataset][target_arch][target_idx],
                 'model/best_model.pt')
             print('{}: Load target model from {}.'.format(device, target_model_dir))
             ckpt = torch.load(target_model_dir, map_location=device)
@@ -301,26 +299,22 @@ def main_worker(gpu, ngpus_per_node, args):
                 target_model.load_state_dict(remove_module(ckpt))
             target_model.cuda(args.gpu)
             if args.distributed:
-                target_model = torch.nn.parallel.DistributedDataParallel(target_model,
-                                                                         device_ids=[args.gpu])
-
-            if args.distributed:
                 dist.barrier()
-                if args.dataset == 'imagenet':
-                    val_sampler.set_epoch(27)
-            acc1_source2target = eval_transfer_ensemble_v3(test_loader_random_1k,
-                                                        model_a=target_model,
-                                                        ensemble=ensemble,
-                                                        args=args,
-                                                        is_main_task=is_main_task)
+                val_sampler.set_epoch(27)
 
-            _result_source2target = 100.-acc1_source2target
+            # Evaluate transferability
+            if len(ensemble_arch) == 1:
+                acc1_transfer = eval_transfer(test_loader_shuffle, ensemble[0], target_model, args, is_main_task)
+            else:
+                acc1_transfer = eval_transfer_ensemble(test_loader_shuffle, ensemble, target_model, args, is_main_task)
+            err1_transfer = 100.-acc1_transfer
             if args.distributed:
                 dist.barrier()
             if is_main_task:
-                result[target_arch] = _result_source2target
-                print(' *  {}: {:.2f}'.format(target_arch, _result_source2target))
-                ckpt = {'result': result}
+                result[target_arch] = err1_transfer
+                print(' *  {}: {:.2f}'.format(target_arch, err1_transfer))
+
+                ckpt = {"state_dict": source_model.state_dict(), 'result': result, 'ckpt_epoch': args.epoch+1}
                 rotateCheckpoint(ckpt_dir, "ckpt", ckpt)
                 logger.save_log()
 
@@ -329,6 +323,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Logging and checkpointing only at the main task (rank0)
     if is_main_task:
+        print('result: {}'.format(result))
+        for target_arch in list_target_arch:
+            result['avg-err'] += result[target_arch]/len(list_target_arch)
+
         for key in result.keys():
             logger.add_scalar(key, result[key], 1)
             logging.info("{}: {:.2f}\t".format(key, result[key]))

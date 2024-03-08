@@ -3,7 +3,7 @@ import argparse
 import os
 from src.utils_general import DictWrapper
 import distutils.util
-    
+
 def parse_args():
     parser = argparse.ArgumentParser()
 
@@ -15,7 +15,7 @@ def parse_args():
                         default=argparse.SUPPRESS)
     parser.add_argument("--pretrain",
     			default=argparse.SUPPRESS)
-    
+
     # hyper-param for optimization
     parser.add_argument("--lr",
     			default=argparse.SUPPRESS, type=float)
@@ -133,14 +133,16 @@ def parse_args():
     # model alignment/misalignment
     parser.add_argument("--source_model",
                         default=argparse.SUPPRESS)
-    parser.add_argument("--modified_source_model",
-    			default=None, type=str)
+    parser.add_argument("--eval_only",
+    			        default=False, type=distutils.util.strtobool)
+    parser.add_argument("--eval_model",
+    			        default=None, type=str)
     parser.add_argument("--target_model",
                         default=argparse.SUPPRESS)
     parser.add_argument("--source_arch",
                         default=argparse.SUPPRESS)
-    parser.add_argument("--source_in_eval_mode",
-                        default=False, type=distutils.util.strtobool)
+    # parser.add_argument("--source_in_eval_mode",
+    #                     default=False, type=distutils.util.strtobool)
     parser.add_argument("--target_arch",
                         default=argparse.SUPPRESS)
     parser.add_argument("--witness_arch",
@@ -160,6 +162,8 @@ def parse_args():
                             default=4./255., type=float)
     parser.add_argument("--pgd_alpha",
                             default=1./255., type=float)
+    parser.add_argument("--atk",
+                            default='pgd', type=str)
 
     parser.add_argument("--rkd_dist_ratio",
                             default=1., type=float)
@@ -176,9 +180,9 @@ def parse_args():
     parser.add_argument("--kl_temp",
                             default=4., type=float)
     parser.add_argument("--kl_reduction",
-                            default='average', type=str)
-    parser.add_argument("--always_proj",
-                        default=True, type=distutils.util.strtobool)
+                            default='avg', choices=['avg', 'max', 'min'], type=str)
+    # parser.add_argument("--always_proj",
+    #                     default=True, type=distutils.util.strtobool)
     parser.add_argument("--lambda_cls",
                             default=0., type=float)
     parser.add_argument("--lambda_kd",
@@ -208,7 +212,7 @@ def get_default(yaml_path):
     default = {}
     with open(yaml_path, 'r') as handle:
         default = yaml.load(handle, Loader=yaml.FullLoader)
-    return default 
+    return default
 
 def get_base_model_dir(yaml_path):
     with open(yaml_path, 'r') as file:
@@ -223,7 +227,7 @@ def get_args():
         default = get_default('options/default_imagenet.yaml')
 
     default.update(vars(args).items())
-    
+
     make_dir(default)
 
     # if args.dataset.startswith('cifar'):

@@ -92,7 +92,7 @@ def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_aug
         pass
     else:
         raise ValueError('invalid dataset name=%s' % dataset)
-    
+
     # load dataset
     if dataset == 'cifar10':
         data_train = datasets.CIFAR10(data_dir, train=True, download=True, transform=transform_train)
@@ -198,7 +198,7 @@ def load_imagenet_test_shuffle(batch_size=128, workers=4, distributed=False):
         transforms.ToTensor(),
         transforms.Normalize(mean, std)
     ])
-    
+
     # load dataset
     dataroot = '/scratch/ssd002/datasets/imagenet'
     valdir = os.path.join(dataroot, 'val')
