@@ -11,6 +11,7 @@ import time
 from torch.utils.data import Subset
 import torchattacks
 from models.ensemble import EnsembleTwo, EnsembleFour
+from src.attacks import InputUnNormalize, InputNormalize
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
@@ -139,7 +140,7 @@ def validate(val_loader, model, criterion, args, is_main_task, whitebox=False):
     return top1.avg, top5.avg
 
 def get_attack(dataset, atk_method, model, eps, alpha, steps, random=True):
-    if dataset == 'imagenet':
+    if dataset in ['imagenet', 'food101', 'cars']:
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
     elif dataset == 'cifar10':
@@ -218,6 +219,78 @@ def eval_transfer(val_loader, source_model, target_model, args, is_main_task):
         p_source2target = target_model((images+delta_source)[qualified, ::])
 
         acc1, acc5 = accuracy(p_source2target, target[qualified], topk=(1, 5))
+
+        top1.update(acc1[0], num_qualified)
+        top5.update(acc5[0], num_qualified)
+        total_qualified.update(num_qualified)
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
+    top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
+    progress = ProgressMeter(
+        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        [batch_time, top1, top5, total_qualified],
+        prefix='Transfer({}): '.format(args.atk))
+
+    # switch to evaluate mode
+    source_model.eval()
+    target_model.eval()
+
+    for i, (images, target) in enumerate(val_loader):
+        run_validate_one_iteration(images, target)
+
+        if (i % args.print_freq == 0 and is_main_task) or args.debug:
+            progress.display(i + 1)
+
+        if args.distributed:
+            total_qualified.all_reduce()
+
+        if total_qualified.sum > (num_eval/args.ngpus_per_node):
+            break
+
+    if args.distributed:
+        top1.all_reduce()
+        top5.all_reduce()
+
+    if is_main_task:
+        progress.display_summary()
+
+    return top1.avg
+
+def eval_transfer_linbp(val_loader, source_model, target_model, args, is_main_task):
+    # Define total number of qualified samples to be evaluated
+    num_eval = 100 if args.debug else 1000
+
+    if args.atk == 'linbp':
+        atk = get_attack(args.dataset, args.atk, source_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
+    else:
+        atk_source = get_attack(args.dataset, args.atk, source_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
+
+        atk_target = get_attack(args.dataset, args.atk, target_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
+
+    def run_validate_one_iteration(images, target):
+        end = time.time()
+        if args.gpu is not None and torch.cuda.is_available():
+            images = images.cuda(args.gpu, non_blocking=True)
+        if torch.backends.mps.is_available():
+            images = images.to('mps')
+            target = target.to('mps')
+        if torch.cuda.is_available():
+            target = target.cuda(args.gpu, non_blocking=True)
+
+        with ctx_noparamgrad_and_eval(source_model) and ctx_noparamgrad_and_eval(target_model):
+            delta_source = atk.generate(source_model, images, target)
+
+        # measure accuracy and record loss
+        num_qualified = 32
+        p_source2target = target_model((images+delta_source))
+
+        acc1, acc5 = accuracy(p_source2target, target, topk=(1, 5))
 
         top1.update(acc1[0], num_qualified)
         top5.update(acc5[0], num_qualified)
@@ -355,6 +428,149 @@ def eval_transfer_ensemble(val_loader, source_ensemble, target_model, args, is_m
 
     if args.distributed:
         top1.all_reduce()
+
+    if is_main_task:
+        progress.display_summary()
+
+    return top1.avg
+
+def eval_transfer_with_defence(val_loader, source_model, target_model, args, is_main_task):
+    from defence.jpeg import jpeg_compress
+    from defence.feature_distillation import FD_jpeg_encode
+    from defence.bit_depth_reduction import bit_depth_reduce
+    from defence.nrp import NRP
+    from defence.core import Smooth
+
+    # Define total number of qualified samples to be evaluated
+    num_eval = 100 if args.debug else 1000
+
+    if args.atk == 'linbp':
+        atk = get_attack(args.dataset, args.atk, source_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
+    else:
+        atk_source = get_attack(args.dataset, args.atk, source_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
+        atk_target = get_attack(args.dataset, args.atk, target_model, args.pgd_eps, args.pgd_alpha, args.pgd_itr if not args.debug else 1)
+
+    def run_validate_one_iteration(images, target):
+        end = time.time()
+        if args.gpu is not None and torch.cuda.is_available():
+            images = images.cuda(args.gpu, non_blocking=True)
+        if torch.backends.mps.is_available():
+            images = images.to('mps')
+            target = target.to('mps')
+        if torch.cuda.is_available():
+            target = target.cuda(args.gpu, non_blocking=True)
+        mean = torch.tensor([0.485, 0.456, 0.406], device = images.device)
+        std = torch.tensor([0.229, 0.224, 0.225], device = images.device)
+
+        with ctx_noparamgrad_and_eval(source_model) and ctx_noparamgrad_and_eval(target_model):
+            if args.atk == 'linbp':
+                delta_source = atk.generate(source_model, images, target)
+                delta_target = atk.generate(target_model, images, target)
+            else:
+                delta_source = atk_source(images, target) - images
+                delta_target = atk_target(images, target) - images
+
+        # compute output
+        with torch.no_grad():
+            p_source = source_model(images)
+            p_target = target_model(images)
+            p_adv_source = source_model(images+delta_source)
+            p_adv_target = target_model(images+delta_target)
+            qualified = return_qualified(p_source, p_target, p_adv_source, p_adv_target, target)
+
+        images_qualified = (images+delta_source)[qualified, ::]
+        target_qualified = target[qualified]
+
+        if args.eccv_specific.endswith(('jpeg', 'fd', 'bit', 'nrp')):
+            images_unnormalized = InputUnNormalize(mean, std)(images_qualified)
+
+            if args.eccv_specific.endswith('jpeg'):
+                images_tf = jpeg_compress(images_unnormalized.permute([0,2,3,1]).cpu().numpy(),
+                                               x_min=0.,
+                                               x_max=1.,
+                                               quality=75)
+                images_def = torch.from_numpy(images_tf.numpy()).permute([0,3,1,2])
+
+            elif args.eccv_specific.endswith('fd'):
+                images_tf = FD_jpeg_encode(images_unnormalized.permute([0,2,3,1]).cpu().numpy())
+                images_def = torch.from_numpy(images_tf).permute([0,3,1,2])
+
+            elif args.eccv_specific.endswith('bit'):
+                images_tf = bit_depth_reduce(images_unnormalized.permute([0,2,3,1]).cpu().numpy(),
+                                               x_min=0.,
+                                               x_max=1.,
+                                               step_num=4,
+                                               alpha=200)
+                images_def = torch.from_numpy(images_tf.numpy()).permute([0,3,1,2])
+
+            elif args.eccv_specific.endswith('nrp'):
+                netG = NRP(3,3,64,23)
+                netG.load_state_dict(torch.load('./defence/NRP/pretrained_purifiers/NRP.pth'))
+                netG = netG.to(images.device)
+                netG.eval()
+                eps = 4/255
+
+                img_m = images_unnormalized + torch.randn_like(images_unnormalized) * 0.05
+                #  Projection
+                img_m = torch.min(torch.max(img_m, images_unnormalized - eps), images_unnormalized + eps)
+                img_m = torch.clamp(img_m, 0.0, 1.0)
+
+                images_def = torch.zeros_like(images_qualified)
+                for i in range(img_m.shape[0]):
+                    images_def[i, ::] = netG(img_m[i].unsqueeze(0)).detach().squeeze().clamp(min=0., max=1.)
+
+            images_def_normalized = InputNormalize(mean, std)(images_def)
+            images_qualified = images_def_normalized.to(images.device)
+
+        # measure accuracy and record loss
+        num_qualified = qualified.sum().item()
+        if args.eccv_specific.endswith('rs'):
+            smooth_target = Smooth(target_model, 1000, 0.25)
+            correct = torch.tensor([0.], device=images.device)
+            for idx in range(num_qualified):
+                correct += smooth_target.predict(images_qualified[idx], 100, 0.001, 100) == target_qualified[idx]
+            acc1 = (correct/num_qualified)*100.
+            acc5 = (correct/num_qualified)*100.
+        else:
+            p_source2target = target_model(images_qualified)
+            acc1, acc5 = accuracy(p_source2target, target_qualified, topk=(1, 5))
+
+        top1.update(acc1[0], num_qualified)
+        top5.update(acc5[0], num_qualified)
+        total_qualified.update(num_qualified)
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+    batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
+    top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+    top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+    total_qualified = AverageMeter('Qualified', ':6.2f', Summary.SUM)
+    progress = ProgressMeter(
+        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        [batch_time, top1, top5, total_qualified],
+        prefix='Transfer({}): '.format(args.atk))
+
+    # switch to evaluate mode
+    source_model.eval()
+    target_model.eval()
+
+    for i, (images, target) in enumerate(val_loader):
+        run_validate_one_iteration(images, target)
+
+        if (i % args.print_freq == 0 and is_main_task) or args.debug:
+            progress.display(i + 1)
+
+        if args.distributed:
+            total_qualified.all_reduce()
+
+        if total_qualified.sum > (num_eval/args.ngpus_per_node):
+            break
+
+    if args.distributed:
+        top1.all_reduce()
+        top5.all_reduce()
 
     if is_main_task:
         progress.display_summary()

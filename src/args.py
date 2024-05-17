@@ -191,6 +191,8 @@ def parse_args():
     parser.add_argument('--source_idx', default=0, type=int)
     parser.add_argument('--target_idx', default=1, type=int)
 
+    parser.add_argument("--eccv_specific",
+                        default='none', type=str)
 
     args = parser.parse_args()
 
@@ -223,7 +225,7 @@ def get_args():
     args = parse_args()
     if args.dataset.startswith('cifar') or args.dataset == 'svhn':
         default = get_default('options/default_cifar.yaml')
-    elif args.dataset == 'imagenet':
+    elif args.dataset in ['imagenet', 'cars', 'food101']:
         default = get_default('options/default_imagenet.yaml')
 
     default.update(vars(args).items())

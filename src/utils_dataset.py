@@ -15,11 +15,8 @@ import math, random
 from src.utils_augmentation import CustomAugment
 from src.sampler import RASampler
 from torchvision.transforms.functional import InterpolationMode
-# from data.Caltech101.caltech_dataset import Caltech
-# from sklearn.model_selection import train_test_split
-# from torch.utils.data import Subset
 
-data_dir = '/scratch/ssd001/home/ama/workspace/data/'
+data_dir = '/h/ama/workspace/data/'
 
 def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_augment=None, ra_magnitude=9, interpolation='bilinear', ra_sampler=False, ra_reps=3, random_erase_prob=0.0, augmix_severity=3):
 
@@ -88,6 +85,16 @@ def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_aug
             transforms.ToTensor(),
             transforms.Normalize(mean, std)
         ])
+    elif dataset in ['cars', 'food101']:
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+
+        transform = transforms.Compose([
+            transforms.Resize(256, interpolation=_interpolation),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std)
+        ])
     elif dataset == 'dummy':
         pass
     else:
@@ -112,6 +119,14 @@ def load_dataset(dataset, batch_size=128, workers=4, distributed=False, auto_aug
         valdir = os.path.join(dataroot, 'val')
         data_train = datasets.ImageFolder(traindir, transform_train)
         data_test = datasets.ImageFolder(valdir, transform_test)
+    elif dataset == 'cars':
+        data_dir = '/h/ama/workspace/data/'
+        data_train = datasets.StanfordCars(data_dir, split = 'train', transform=transform, download = True)
+        data_test = datasets.StanfordCars(data_dir, split = 'test', transform = transform, download =True)
+    elif dataset == 'food101':
+        data_dir = '/h/ama/workspace/data/'
+        data_train = datasets.Food101(data_dir, split = 'train', transform=transform, download = True)
+        data_test = datasets.Food101(data_dir, split = 'test', transform = transform, download =True)
 
     if distributed:
         if ra_sampler:
